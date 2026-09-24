@@ -2,59 +2,96 @@
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14131a">
+<meta name="description" content="Monte um modpack de Minecraft que realmente abre e gere um instalador para os seus amigos.">
 <title>ModpackForge</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 22 22' shape-rendering='crispEdges'%3E%3Crect width='22' height='22' fill='%2314131a'/%3E%3Cg fill='%230e0d15' stroke='%233d3b55'%3E%3Crect x='1.5' y='1.5' width='5' height='5'/%3E%3Crect x='8.5' y='1.5' width='5' height='5'/%3E%3Crect x='15.5' y='1.5' width='5' height='5'/%3E%3Crect x='1.5' y='8.5' width='5' height='5'/%3E%3Crect x='15.5' y='8.5' width='5' height='5'/%3E%3Crect x='1.5' y='15.5' width='5' height='5'/%3E%3Crect x='15.5' y='15.5' width='5' height='5'/%3E%3C/g%3E%3Crect x='8.5' y='8.5' width='5' height='5' fill='%233b6fd4'/%3E%3Crect x='8.5' y='15.5' width='5' height='5' fill='%23e3a832'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
 
-<header class="alvo">
+<header class="topo" id="topo">
   <div class="marca">
-    <span class="marca-nome">ModpackForge</span>
-    <span class="marca-sub">monte o pack, mande o arquivo</span>
+    <!-- Uma bancada de crafting 3x3 com uma receita dentro: lápis e ouro,
+         os dois materiais que o app usa para "escolhido" e "veio junto". -->
+    <svg class="marca-simbolo" viewBox="0 0 22 22" shape-rendering="crispEdges" aria-hidden="true">
+      <g class="marca-celula">
+        <rect x="1.5" y="1.5" width="5" height="5"/><rect x="8.5" y="1.5" width="5" height="5"/><rect x="15.5" y="1.5" width="5" height="5"/>
+        <rect x="1.5" y="8.5" width="5" height="5"/><rect x="15.5" y="8.5" width="5" height="5"/>
+        <rect x="1.5" y="15.5" width="5" height="5"/><rect x="15.5" y="15.5" width="5" height="5"/>
+      </g>
+      <rect class="marca-lapis" x="8.5" y="8.5" width="5" height="5"/>
+      <rect class="marca-ouro" x="8.5" y="15.5" width="5" height="5"/>
+    </svg>
+    <div class="marca-texto">
+      <span class="marca-nome">ModpackForge</span>
+      <span class="marca-sub">monte o pack, mande o arquivo</span>
+    </div>
   </div>
 
-  <div class="alvo-grupo" role="group" aria-label="Modloader">
-    <span class="alvo-rotulo">Modloader</span>
-    <div class="loaders" id="loaders"></div>
+  <!-- No celular a escolha de versão cabe numa linha e abre quando tocada:
+       ela é feita uma vez e raramente muda, então não merece a primeira tela. -->
+  <button class="alvo-resumo" id="alternarAlvo" type="button" aria-expanded="false" aria-controls="painelAlvo">
+    <span class="alvo-resumo-texto" id="resumoAlvo">Escolha a versão</span>
+    <svg class="icone icone-seta" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
+  </button>
+
+  <div class="alvo" id="painelAlvo">
+    <div class="alvo-grupo">
+      <label class="alvo-rotulo" for="versaoJogo">Minecraft</label>
+      <div class="alvo-linha">
+        <select id="versaoJogo" class="campo"></select>
+        <label class="caixa" title="Mostrar snapshots e pré-lançamentos">
+          <input type="checkbox" id="mostrarInstaveis"> snapshots
+        </label>
+      </div>
+    </div>
+
+    <div class="alvo-grupo" role="group" aria-labelledby="rotuloLoader">
+      <span class="alvo-rotulo" id="rotuloLoader">Modloader</span>
+      <div class="loaders" id="loaders"></div>
+    </div>
+
+    <div class="alvo-grupo">
+      <label class="alvo-rotulo" for="versaoLoader">Versão do loader</label>
+      <select id="versaoLoader" class="campo" disabled></select>
+    </div>
   </div>
 
-  <div class="alvo-grupo">
-    <label class="alvo-rotulo" for="versaoJogo">Minecraft</label>
-    <select id="versaoJogo" class="campo"></select>
-    <label class="caixa" title="Mostrar snapshots e pré-lançamentos">
-      <input type="checkbox" id="mostrarInstaveis"> snapshots
-    </label>
-  </div>
-
-  <div class="alvo-grupo">
-    <label class="alvo-rotulo" for="versaoLoader">Versão do loader</label>
-    <select id="versaoLoader" class="campo" disabled></select>
-  </div>
-
-  <button class="botao botao-fantasma" id="abrirConfig" type="button">Configurações</button>
+  <button class="botao-icone" id="abrirConfig" type="button" aria-label="Configurações" title="Configurações">
+    <svg class="icone" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M6.5 1.5h3l.5 2 1.6.9 2-.6 1.5 2.6-1.5 1.4v1.4l1.5 1.4-1.5 2.6-2-.6-1.6.9-.5 2h-3l-.5-2-1.6-.9-2 .6-1.5-2.6L2 8.7V7.3L.5 5.9 2 3.3l2 .6 1.6-.9z"/>
+      <rect x="6" y="6" width="4" height="4"/>
+    </svg>
+  </button>
 </header>
 
-<main>
+<main class="principal">
   <!-- navegador de mods ------------------------------------------------- -->
   <section class="navegador" aria-label="Catálogo de mods">
     <div class="busca">
-      <input type="search" id="consulta" class="campo campo-busca" placeholder="Buscar mods" autocomplete="off" disabled>
-      <select id="ordem" class="campo campo-curto" disabled>
-        <option value="relevance">Relevância</option>
-        <option value="downloads">Mais baixados</option>
-        <option value="follows">Mais seguidos</option>
-        <option value="updated">Atualizados</option>
-        <option value="newest">Novos</option>
-      </select>
-      <select id="fontes" class="campo campo-curto" disabled>
-        <option value="ambas">Modrinth + CurseForge</option>
-        <option value="modrinth">Só Modrinth</option>
-        <option value="curseforge">Só CurseForge</option>
-      </select>
+      <div class="busca-campo">
+        <svg class="icone" viewBox="0 0 16 16" aria-hidden="true"><path d="M7 2.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9zM10.5 10.5l3.5 3.5"/></svg>
+        <input type="search" id="consulta" class="campo campo-busca" placeholder="Buscar mods" autocomplete="off" aria-label="Buscar mods" disabled>
+      </div>
+      <div class="busca-filtros">
+        <select id="ordem" class="campo" aria-label="Ordenar por" disabled>
+          <option value="relevance">Relevância</option>
+          <option value="downloads">Mais baixados</option>
+          <option value="follows">Mais seguidos</option>
+          <option value="updated">Atualizados</option>
+          <option value="newest">Novos</option>
+        </select>
+        <select id="fontes" class="campo" aria-label="Lojas" disabled>
+          <option value="ambas">Todas as lojas</option>
+          <option value="modrinth">Só Modrinth</option>
+          <option value="curseforge">Só CurseForge</option>
+        </select>
+      </div>
     </div>
 
     <div class="categorias" id="categorias"></div>
@@ -70,19 +107,24 @@
   </section>
 
   <!-- painel do pack ----------------------------------------------------- -->
-  <aside class="pack" aria-label="Seu pack">
+  <aside class="pack" id="pack" aria-label="Seu pack">
     <header class="pack-topo">
-      <input type="text" id="nomePack" class="campo campo-nome" value="Meu pack" maxlength="80" aria-label="Nome do pack">
-      <p class="pack-conta" id="packConta">Nenhum mod ainda</p>
+      <div class="pack-titulo">
+        <input type="text" id="nomePack" class="campo campo-nome" value="Meu pack" maxlength="80" aria-label="Nome do pack">
+        <button class="botao-icone pack-fechar" id="fecharPack" type="button" aria-label="Fechar o pack">
+          <svg class="icone" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+        </button>
+      </div>
+      <!-- O pack desenhado como inventário: 9 colunas, a largura do inventário
+           do jogo. A lista abaixo carrega a informação; a grade é o retrato. -->
+      <div class="inventario" id="packGrade" aria-hidden="true"></div>
+      <p class="pack-legenda" id="packConta">Nenhum mod ainda</p>
     </header>
 
     <div class="pack-alertas" id="packAlertas"></div>
 
     <div class="pack-corpo" id="packCorpo">
-      <div class="vazio" id="packVazio">
-        <div class="vazio-slot" aria-hidden="true"></div>
-        <p>Os mods que você escolher aparecem aqui, junto com tudo que eles exigem.</p>
-      </div>
+      <p class="pack-vazio">Os mods que você escolher aparecem aqui, junto com tudo que eles exigem.</p>
     </div>
 
     <footer class="pack-rodape">
@@ -91,6 +133,17 @@
     </footer>
   </aside>
 </main>
+
+<div class="fundo-pack" id="fundoPack" hidden></div>
+
+<!-- No celular o pack vive aqui embaixo, como a hotbar do jogo. -->
+<nav class="hotbar" id="barraPack" aria-label="Seu pack">
+  <button class="hotbar-botao" id="abrirPack" type="button" aria-controls="pack" aria-expanded="false">
+    <span class="hotbar-slots" id="barraSlots" aria-hidden="true"></span>
+    <span class="hotbar-texto" id="barraTexto">Pack vazio</span>
+    <svg class="icone icone-subir" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 10l4-4 4 4"/></svg>
+  </button>
+</nav>
 
 <!-- detalhe do mod -------------------------------------------------------- -->
 <dialog class="janela" id="janelaDetalhe">

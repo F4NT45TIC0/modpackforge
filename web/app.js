@@ -97,6 +97,20 @@ const formatarNumero = (n) =>
 const formatarTamanho = (b) =>
   b >= 1_073_741_824 ? `${(b / 1_073_741_824).toFixed(1)} GB` : `${Math.round(b / 1_048_576)} MB`;
 
+/** Plural simples: "1 mod", "2 mods". */
+const contar = (n, singular, plural) => `${n} ${n === 1 ? singular : plural}`;
+
+// Ícones de traço reto, pontas quadradas — combinam com o resto blocado.
+const ICONES = {
+  mais: '<path d="M8 3v10M3 8h10"/>',
+  menos: '<path d="M3 8h10"/>',
+  cadeado: '<rect x="3.5" y="7.5" width="9" height="6.5"/><path d="M5.5 7.5V5a2.5 2.5 0 0 1 5 0v2.5"/>',
+  aviso: '<path d="M8 2.5l6 11H2z"/><path d="M8 6.5v3M8 11.5v.5"/>',
+  junto: '<rect x="2.5" y="5.5" width="7" height="7"/><path d="M6.5 5.5v-3h7v7h-3"/>',
+  baixado: '<path d="M8 2.5v8M4.5 7l3.5 3.5L11.5 7M3 13.5h10"/>',
+};
+const icone = (nome) => `<svg class="icone" viewBox="0 0 16 16" aria-hidden="true">${ICONES[nome]}</svg>`;
+
 // ------------------------------------------------------------- inicialização
 
 async function iniciar() {
@@ -126,12 +140,14 @@ async function iniciar() {
   if (rascunho?.pack?.length) {
     for (const m of rascunho.pack) estado.pack.set(chaveDe(m.fonte, m.projetoId), m);
     if (rascunho.nome) $('#nomePack').value = rascunho.nome;
-    mostrarAviso(`Voltei com o seu pack de antes: ${rascunho.pack.length} mods.`);
+    mostrarAviso(`Voltei com o seu pack de antes: ${contar(rascunho.pack.length, 'mod', 'mods')}.`);
   }
 
   await trocarVersaoJogo();
   ligarEventos();
+  // Com rascunho, resolve de novo; sem, desenha o inventário vazio.
   if (estado.pack.size) agendarResolucao();
+  else desenharPack();
 }
 
 function desenharLoaders() {
@@ -200,6 +216,33 @@ async function carregarVersoesLoader() {
     mostrarAviso(`Não consegui listar as versões do loader: ${erro.message}`, 'erro');
   }
   atualizarBotaoExportar();
+  atualizarResumoAlvo();
+}
+
+/** A linha que resume a escolha no celular, lida como frase. */
+function atualizarResumoAlvo() {
+  const nomeLoader = estado.inicio?.loaders.find((l) => l.id === estado.loader)?.nome ?? estado.loader;
+  $('#resumoAlvo').textContent = estado.mc
+    ? `Minecraft ${estado.mc} com ${nomeLoader}${estado.loaderVersao ? ` ${estado.loaderVersao}` : ''}`
+    : 'Escolha a versão';
+}
+
+// ------------------------------------------------ gaveta do pack (celular)
+
+function abrirGaveta() {
+  document.body.dataset.packAberto = 'sim';
+  $('#fundoPack').hidden = false;
+  $('#abrirPack').setAttribute('aria-expanded', 'true');
+  // O foco entra na gaveta; sem isso o teclado continuaria na lista escondida atrás.
+  setTimeout(() => $('#fecharPack').focus(), 60);
+}
+
+function fecharGaveta({ devolverFoco = true } = {}) {
+  if (document.body.dataset.packAberto !== 'sim') return;
+  delete document.body.dataset.packAberto;
+  $('#fundoPack').hidden = true;
+  $('#abrirPack').setAttribute('aria-expanded', 'false');
+  if (devolverFoco) $('#abrirPack').focus();
 }
 
 // -------------------------------------------------------------------- busca
@@ -263,7 +306,7 @@ function atualizarSentinela() {
     sentinela.dataset.estado = 'espera';
   } else {
     sentinela.textContent = estado.resultados.length
-      ? `${estado.resultados.length} mods · acabou a lista`
+      ? `Fim da lista: ${contar(estado.resultados.length, 'mod', 'mods')}`
       : '';
     sentinela.dataset.estado = 'fim';
   }
@@ -277,7 +320,13 @@ async function buscar() {
   estado.buscando = true;
   estado.falhouPagina = false;
   if (estado.pagina === 0) {
-    $('#resultados').innerHTML = '<li class="carregando">procurando…</li>';
+    // Esqueleto com a forma das linhas: a lista não pula quando os mods chegam.
+    const esqueleto = `<li class="mod mod-esqueleto" aria-hidden="true">
+      <div class="mod-slot"></div>
+      <div class="mod-info"><span class="barra barra-1"></span><span class="barra barra-2"></span><span class="barra barra-3"></span></div>
+    </li>`;
+    $('#resultados').innerHTML = esqueleto.repeat(6);
+    $('#resultados').setAttribute('aria-busy', 'true');
   }
   atualizarSentinela();
 
@@ -315,12 +364,17 @@ async function buscar() {
   } catch (erro) {
     estado.falhouPagina = true;
     if (estado.pagina === 0) {
-      $('#resultados').innerHTML = `<li class="carregando">${esc(erro.message)}</li>`;
+      // Sem redesenhar depois: a lista está vazia, e o redesenho trocaria o erro
+      // real por "nenhum mod para essa combinação", mandando procurar o problema
+      // no lugar errado.
+      const lista = $('#resultados');
+      lista.removeAttribute('aria-busy');
+      lista.innerHTML = `<li class="carregando">Não consegui buscar os mods: ${esc(erro.message)}</li>`;
     } else {
       estado.pagina--; // a página não entrou; tentar de novo repete esta, não a seguinte
       mostrarAviso(`Não consegui carregar mais mods: ${erro.message}`, 'erro');
+      desenharResultados();
     }
-    desenharResultados();
   } finally {
     estado.buscando = false;
     atualizarSentinela();
@@ -361,6 +415,7 @@ function escolhidosParaChecagem() {
 
 function desenharResultados() {
   const lista = $('#resultados');
+  lista.removeAttribute('aria-busy');
   if (!estado.resultados.length) {
     lista.innerHTML = `<li class="carregando">${
       estado.consulta ? 'Nada com esse nome para ' + esc(estado.loader) + ' ' + esc(estado.mc) + '.' : 'Nenhum mod para essa combinação.'
@@ -372,44 +427,73 @@ function desenharResultados() {
 
   const jaNoPack = escolhidosParaChecagem();
 
+  // Mods que já entraram como dependência de outro. Sem essa marca, a lista
+  // oferecia "Adicionar" para algo que já está no pack.
+  const vemJunto = new Map(
+    (estado.plano?.arquivos ?? []).filter((a) => a.origem === 'dependencia').map((a) => [a.chave, a]),
+  );
+
   lista.innerHTML = estado.resultados
     .map((mod) => {
       const chave = chaveDe(mod.fonte, mod.id);
       const dentro = estado.pack.has(chave);
-      const choques = dentro ? [] : checarCandidato(mod, jaNoPack);
+      const dependencia = !dentro ? vemJunto.get(chave) : null;
+      const choques = dentro || dependencia ? [] : checarCandidato(mod, jaNoPack);
       const bloqueio = choques.find((c) => c.severidade === 'bloqueio');
       const aviso = choques.find((c) => c.severidade === 'aviso');
 
-      const estadoLinha = dentro ? 'no-pack' : bloqueio ? 'bloqueado' : 'livre';
+      const estadoLinha = dentro ? 'no-pack' : dependencia ? 'dependencia' : bloqueio ? 'bloqueado' : 'livre';
+      const nome = esc(mod.nome);
 
+      // O texto do botão continua no HTML mesmo quando o celular mostra só o
+      // ícone: é ele que o leitor de tela anuncia.
       let acao;
       if (dentro) {
-        acao = `<button class="botao" data-remover="${esc(chave)}">Tirar</button>`;
+        acao = `<button class="botao botao-acao" data-remover="${esc(chave)}" title="Tirar ${nome} do pack">
+          ${icone('menos')}<span class="botao-texto">Tirar</span></button>`;
       } else if (bloqueio) {
-        acao = `<button class="botao" disabled>Bloqueado</button>
-                <span class="motivo-bloqueio">${esc(bloqueio.titulo)}: ${esc(bloqueio.outro.nome)}</span>`;
+        acao = `<button class="botao botao-acao" disabled title="Bloqueado">
+          ${icone('cadeado')}<span class="botao-texto">Bloqueado</span></button>`;
+      } else if (dependencia) {
+        // Continua adicionável — escolher fixa o mod no pack mesmo se quem o
+        // exige sair —, mas sem o destaque de lápis: não é preciso.
+        acao = `<button class="botao botao-acao" data-adicionar="${esc(chave)}" title="Já vem no pack. Adicionar ${nome} como escolha sua">
+          ${icone('mais')}<span class="botao-texto">Adicionar</span></button>`;
       } else {
-        acao = `<button class="botao botao-forte" data-adicionar="${esc(chave)}">Adicionar</button>` +
-          (aviso ? `<span class="motivo-bloqueio motivo-aviso">${esc(aviso.titulo)}</span>` : '');
+        acao = `<button class="botao botao-forte botao-acao" data-adicionar="${esc(chave)}" title="Adicionar ${nome} ao pack">
+          ${icone('mais')}<span class="botao-texto">Adicionar</span></button>`;
       }
 
-      const icone = mod.icone
+      // O motivo mora dentro da informação, não ao lado do botão: no celular
+      // não sobra largura ali, e é aqui que os olhos já estão lendo.
+      const motivo = dependencia
+        ? `<p class="mod-motivo" data-tipo="dependencia">${icone('junto')}<span>Já vem no pack${
+            dependencia.exigidoPor?.length ? `: exigido por ${esc(dependencia.exigidoPor.join(', '))}` : ''
+          }</span></p>`
+        : bloqueio
+        ? `<p class="mod-motivo" data-tipo="bloqueio">${icone('cadeado')}<span>${esc(bloqueio.titulo)}: ${esc(bloqueio.outro.nome)}</span></p>`
+        : aviso
+          ? `<p class="mod-motivo" data-tipo="aviso">${icone('aviso')}<span>${esc(aviso.titulo)}</span></p>`
+          : '';
+
+      const retrato = mod.icone
         ? `<img src="${esc(mod.icone)}" alt="" loading="lazy">`
         : `<span class="mod-slot-vazio">${esc((mod.nome || '?')[0].toUpperCase())}</span>`;
 
       return `<li class="mod" data-estado="${estadoLinha}" data-chave="${esc(chave)}">
-        <div class="mod-slot">${icone}</div>
+        <div class="mod-slot">${retrato}</div>
         <div class="mod-info">
           <div class="mod-titulo">
-            <button class="mod-nome" data-detalhe="${esc(chave)}">${esc(mod.nome)}</button>
-            <span class="mod-autor">${esc(mod.autor ?? '')}</span>
+            <button class="mod-nome" data-detalhe="${esc(chave)}">${nome}</button>
+            ${mod.autor ? `<span class="mod-autor">${esc(mod.autor)}</span>` : ''}
           </div>
           <p class="mod-resumo">${esc(mod.resumo)}</p>
           <div class="mod-meta">
             <span class="loja loja-${esc(mod.fonte)}">${mod.fonte === 'modrinth' ? 'Modrinth' : 'CurseForge'}</span>
-            <span class="numero">${formatarNumero(mod.downloads)} downloads</span>
-            ${mod.categorias.slice(0, 3).map((c) => `<span>${esc(c)}</span>`).join('')}
+            <span class="numero" title="${Number(mod.downloads ?? 0).toLocaleString('pt-BR')} downloads">${icone('baixado')}${formatarNumero(mod.downloads)}</span>
+            ${mod.categorias.slice(0, 3).map((c) => `<span class="tag">${esc(c)}</span>`).join('')}
           </div>
+          ${motivo}
         </div>
         <div class="mod-acao">${acao}</div>
       </li>`;
@@ -486,32 +570,93 @@ async function resolverPack() {
   }
 }
 
+// --------------------------------------------- o pack como inventário
+
+// Três fileiras de nove, como o inventário principal do jogo. Packs maiores
+// mostram um "+N" no último slot; a lista abaixo da grade tem todos.
+const SLOTS_NO_INVENTARIO = 27;
+const SLOTS_NA_HOTBAR = 9;
+
+function slotDoItem(item, { novo = false, conflito = false } = {}) {
+  const retrato = item.icone
+    ? `<img src="${esc(item.icone)}" alt="" loading="lazy">`
+    : `<span class="slot-letra">${esc((item.nome || '?')[0].toUpperCase())}</span>`;
+  return `<span class="slot" data-origem="${esc(item.origem)}"${conflito ? ' data-conflito="sim"' : ''}${
+    novo ? ' data-novo="sim"' : ''
+  } title="${esc(item.nome)}">${retrato}</span>`;
+}
+
+function desenharInventario(itens, marcas) {
+  let visiveis = itens;
+  let excedente = 0;
+  if (itens.length > SLOTS_NO_INVENTARIO) {
+    visiveis = itens.slice(0, SLOTS_NO_INVENTARIO - 1);
+    excedente = itens.length - visiveis.length;
+  }
+  const cheios = visiveis.map((i) => slotDoItem(i, marcas(i)));
+  if (excedente) cheios.push(`<span class="slot slot-mais" title="mais ${excedente} na lista abaixo">+${excedente}</span>`);
+
+  // Sempre fileiras completas, e pelo menos uma: um inventário vazio também é
+  // um convite para encher.
+  const total = Math.max(9, Math.ceil(cheios.length / 9) * 9);
+  $('#packGrade').innerHTML = cheios.join('') + '<span class="slot"></span>'.repeat(total - cheios.length);
+}
+
+function desenharHotbar(itens, marcas, texto, comConflito) {
+  const cheios = itens.slice(0, SLOTS_NA_HOTBAR).map((i) => slotDoItem(i, marcas(i)));
+  $('#barraSlots').innerHTML =
+    cheios.join('') + '<span class="slot"></span>'.repeat(SLOTS_NA_HOTBAR - cheios.length);
+  $('#barraTexto').textContent = texto;
+  $('#barraPack').dataset.estado = comConflito ? 'bloqueio' : '';
+  $('#abrirPack').setAttribute('aria-label', `Abrir o pack: ${texto}`);
+}
+
+const semMarcas = () => ({});
+
 function desenharPack() {
   const corpo = $('#packCorpo');
   const alertas = $('#packAlertas');
 
   if (!estado.pack.size) {
-    corpo.innerHTML = `<div class="vazio">
-      <div class="vazio-slot" aria-hidden="true"></div>
-      <p>Os mods que você escolher aparecem aqui, junto com tudo que eles exigem.</p>
-    </div>`;
+    corpo.innerHTML =
+      '<p class="pack-vazio">Os mods que você escolher aparecem aqui, junto com tudo que eles exigem.</p>';
     alertas.innerHTML = '';
     $('#packConta').textContent = 'Nenhum mod ainda';
     $('#packPeso').textContent = '';
+    desenharInventario([], semMarcas);
+    desenharHotbar([], semMarcas, 'Pack vazio', false);
     atualizarBotaoExportar();
     return;
   }
 
   const plano = estado.plano;
   if (!plano) {
-    corpo.innerHTML = '<p class="carregando">resolvendo dependências…</p>';
-    $('#packConta').textContent = `${estado.pack.size} escolhidos`;
+    // Ainda sem resposta do servidor: mostra o que o usuário escolheu.
+    const escolhidosAgora = [...estado.pack.entries()].map(([chave, m]) => ({ ...m, chave, origem: 'escolhido' }));
+    corpo.innerHTML = '<p class="carregando">Resolvendo dependências…</p>';
+    $('#packConta').innerHTML = `<span class="legenda" data-tipo="escolhido"><i></i>${contar(estado.pack.size, 'escolhido', 'escolhidos')}</span>`;
+    desenharInventario(escolhidosAgora, semMarcas);
+    desenharHotbar(escolhidosAgora, semMarcas, 'Resolvendo…', false);
     atualizarBotaoExportar();
     return;
   }
 
   const escolhidos = plano.arquivos.filter((a) => a.origem === 'escolhido');
   const dependencias = plano.arquivos.filter((a) => a.origem === 'dependencia');
+
+  // Quem está num conflito de bloqueio, e quem acabou de chegar sozinho —
+  // calculado antes de marcar tudo como visto.
+  const emConflito = new Set(
+    plano.conflitos
+      .filter((c) => c.severidade === 'bloqueio')
+      .flatMap((c) => c.envolvidos.map((e) => e.chave))
+      .filter(Boolean),
+  );
+  const chegaramAgora = new Set(
+    dependencias.filter((a) => !estado.vistos.has(a.chave)).map((a) => a.chave),
+  );
+  const marcas = (a) => ({ novo: chegaramAgora.has(a.chave), conflito: emConflito.has(a.chave) });
+  const noInventario = [...escolhidos, ...dependencias];
 
   const linha = (a) => {
     const novo = a.origem === 'dependencia' && !estado.vistos.has(a.chave) ? ' data-novo="sim"' : '';
@@ -530,7 +675,7 @@ function desenharPack() {
         <span class="pack-versao">${esc(a.versaoNumero ?? '')}</span>
         ${porque}
       </span>
-      ${a.origem === 'escolhido' ? `<button class="pack-remover" data-remover="${esc(a.chave)}" title="Tirar do pack" aria-label="Tirar ${esc(a.nome)} do pack">✕</button>` : '<span></span>'}
+      ${a.origem === 'escolhido' ? `<button class="pack-remover" data-remover="${esc(a.chave)}" title="Tirar do pack" aria-label="Tirar ${esc(a.nome)} do pack"><svg class="icone" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>` : '<span></span>'}
     </li>`;
   };
 
@@ -583,9 +728,29 @@ function desenharPack() {
   }
   alertas.innerHTML = blocos.join('');
 
-  $('#packConta').textContent =
-    `${plano.resumo.escolhidos} escolhidos · ${plano.resumo.dependencias} dependências · ${plano.resumo.total} arquivos`;
+  // A legenda é a chave de cores da grade, e já traz as contagens.
+  const bloqueios = plano.resumo.bloqueios ?? 0;
+  const legenda = [
+    `<span class="legenda" data-tipo="escolhido"><i></i>${contar(escolhidos.length, 'escolhido', 'escolhidos')}</span>`,
+  ];
+  if (dependencias.length) {
+    legenda.push(
+      `<span class="legenda" data-tipo="dependencia"><i></i>${dependencias.length} ${dependencias.length === 1 ? 'veio junto' : 'vieram junto'}</span>`,
+    );
+  }
+  if (bloqueios) {
+    legenda.push(`<span class="legenda" data-tipo="bloqueio"><i></i>${contar(bloqueios, 'conflito', 'conflitos')}</span>`);
+  }
+  $('#packConta').innerHTML = legenda.join('');
   $('#packPeso').textContent = plano.resumo.tamanho ? `${formatarTamanho(plano.resumo.tamanho)} para baixar` : '';
+
+  desenharInventario(noInventario, marcas);
+  const textoHotbar = bloqueios
+    ? contar(bloqueios, 'conflito', 'conflitos')
+    : estado.resolvendo
+      ? 'Resolvendo…'
+      : contar(plano.resumo.total, 'mod', 'mods');
+  desenharHotbar(noInventario, marcas, textoHotbar, bloqueios > 0);
 
   atualizarBotaoExportar();
 }
@@ -858,6 +1023,27 @@ function ligarEventos() {
   $('#versaoLoader').addEventListener('change', (e) => {
     estado.loaderVersao = e.target.value;
     atualizarBotaoExportar();
+    atualizarResumoAlvo();
+  });
+
+  // Celular: a escolha de versão abre e fecha a partir da linha de resumo.
+  $('#alternarAlvo').addEventListener('click', () => {
+    const abrir = $('#topo').dataset.alvoAberto !== 'sim';
+    $('#topo').dataset.alvoAberto = abrir ? 'sim' : '';
+    $('#alternarAlvo').setAttribute('aria-expanded', String(abrir));
+  });
+
+  // Celular: a hotbar abre o pack; o fundo, o X e o Esc fecham.
+  $('#abrirPack').addEventListener('click', abrirGaveta);
+  $('#fecharPack').addEventListener('click', () => fecharGaveta());
+  $('#fundoPack').addEventListener('click', () => fecharGaveta());
+  document.addEventListener('keydown', (e) => {
+    // Com uma janela aberta, o Esc é dela.
+    if (e.key === 'Escape' && !document.querySelector('dialog[open]')) fecharGaveta();
+  });
+  // Se a tela crescer para o layout de computador, a gaveta deixa de existir.
+  matchMedia('(min-width: 56.25rem)').addEventListener('change', (e) => {
+    if (e.matches) fecharGaveta({ devolverFoco: false });
   });
 
   $('#consulta').addEventListener('input', (e) => {
