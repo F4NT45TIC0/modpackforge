@@ -1,8 +1,9 @@
 // Camada HTTP compartilhada: cache em memória, fila por host e retry com backoff.
 // Zero dependências — Node 24 já traz fetch, AbortSignal.timeout e crypto.
 
+// A Modrinth pede um User-Agent que identifique o app e um jeito de contato.
 export const USER_AGENT =
-  'ModpackForge/1.0 (local modpack builder; +https://github.com/local/modpackforge)';
+  'ModpackForge/1.0 (modpack builder; +https://github.com/F4NT45TIC0/modpackforge)';
 
 const cache = new Map(); // chave -> { expira, dados }
 const emVoo = new Map(); // chave -> Promise (deduplica requisições idênticas simultâneas)

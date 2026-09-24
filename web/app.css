@@ -713,6 +713,18 @@ main {
 }
 
 .resultado-exportar ul { margin: 0; padding-left: 1.1rem; font-family: var(--mono); font-size: var(--t-xs); }
+
+.resultado-exportar .downloads {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
+  font-family: var(--fonte);
+}
+
+.resultado-exportar .downloads li { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.resultado-exportar .downloads .botao { text-decoration: none; }
+.resultado-exportar .tamanho { font-family: var(--mono); font-size: var(--t-xs); color: var(--texto-apagado); }
 .resultado-exportar .caminho { font-family: var(--mono); font-size: var(--t-xs); color: var(--texto-fraco); word-break: break-all; }
 
 /* --- detalhe do mod ----------------------------------------------------- */

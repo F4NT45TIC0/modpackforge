@@ -164,33 +164,72 @@ Duas coisas alimentam o bloqueio:
 - **Conflitos conhecidos que ninguém declara.** Dois motores de renderização
   (Sodium, Embeddium, OptiFine, Canvas), dois carregadores de shader, dois
   rewrites do sistema de luz. Essa lista fica em
-  [`src/conflitos.mjs`](src/conflitos.mjs) e é fácil de ampliar.
+  [`web/compartilhado/conflitos.mjs`](web/compartilhado/conflitos.mjs) e é fácil de ampliar.
 
 Há dois níveis. **Bloqueio** é quando o jogo não abre — a interface impede.
 **Aviso** é quando funciona mas é redundante, como JEI e REI juntos — a interface
 deixa passar e só explica.
 
 O mesmo arquivo de regras roda nos dois lados: o navegador importa
-`src/conflitos.mjs` para bloquear na hora, sem esperar o servidor, e o servidor
-usa o mesmo módulo para conferir antes de gerar o arquivo.
+`web/compartilhado/conflitos.mjs` para bloquear na hora, sem esperar o servidor,
+e o servidor usa o mesmo módulo para conferir antes de gerar o arquivo.
+
+## Publicar como site na Vercel
+
+O projeto já vem pronto para a Vercel: o mesmo código que roda no seu PC vira
+uma função (`api/index.js`) e a interface é servida como site estático.
+
+1. Em [vercel.com](https://vercel.com), **Add New → Project** e importe o
+   repositório `modpackforge` do GitHub.
+2. Não mude nada nas configurações de build — o `vercel.json` já define tudo.
+   Clique em **Deploy**.
+3. *(Opcional)* Para a CurseForge aparecer na busca: **Settings → Environment
+   Variables**, crie `CURSEFORGE_API_KEY` com a sua chave e faça um **Redeploy**.
+
+Depois disso, todo push na branch `main` publica sozinho.
+
+### O que muda no site
+
+| | No seu PC | No site |
+|---|---|---|
+| Arquivos gerados | Gravados em `packs/` e oferecidos para download | Só para download — a Vercel não tem disco |
+| Chave da CurseForge | Salva pela tela de Configurações | Variável `CURSEFORGE_API_KEY`, definida por quem hospeda |
+| Limite por pack | 400 mods | 150 mods |
+
+A chave da CurseForge nunca chega ao navegador de quem visita — nem o final
+dela. Todo visitante usa a cota da sua chave.
+
+### Limites a conhecer
+
+- **Tempo de função.** O `vercel.json` pede 60 segundos por chamada. Um pack de
+  15 mods leva uns 20 segundos na primeira vez; packs muito grandes podem
+  passar disso. Se acontecer, aumente `maxDuration` no `vercel.json` — o teto
+  depende do seu plano.
+- **O site é público e não tem limite de uso por visitante.** Cada pack gasta
+  tempo de função da sua conta e centenas de chamadas às lojas. Para uso entre
+  amigos isso não pesa; se o link se espalhar, vale olhar o painel de uso da
+  Vercel.
 
 ## Requisitos
 
-- **Node.js 18+** para rodar o ModpackForge (só em quem monta o pack).
+- **Node.js 20+** para rodar o ModpackForge (só em quem monta o pack).
 - **Windows** para o `.bat` gerado. Quem recebe não precisa de Node.
 - **Java** em quem recebe — ou já instalado, ou o que o launcher do Minecraft baixa.
 
 ## Estrutura
 
 ```
-ModpackForge.bat      abre o app
-server.mjs            servidor local: rotas, validação, arquivos estáticos
+ModpackForge.bat      abre o app no PC
+server.mjs            servidor local: arquivos estáticos e ponte para a API
+verificar.mjs         confere uma pasta de mods já instalada
+api/index.js          a mesma API, como função da Vercel
+vercel.json           configuração do site
 src/
+  api.mjs                rotas e validação — o mesmo código no PC e no site
   http.mjs               cache, fila por host e retry
   modrinth.mjs           provider da Modrinth
   curseforge.mjs         provider da CurseForge
   loaders.mjs            versões e instaladores dos modloaders (cliente e servidor)
-  conflitos.mjs          regras de incompatibilidade (usado pelos dois lados)
   jarmeta.mjs            lê fabric.mod.json dentro do jar via HTTP Range
   versoes.mjs            comparação de versões e faixas (Fabric e Maven)
   compatibilidade.mjs    ajusta o pack até todas as exigências fecharem
@@ -201,7 +240,8 @@ src/
   instalador-servidor.sh o que roda na VPS
   zip.mjs                escritor de ZIP para o .mrpack
 web/                  a interface
-packs/                os packs gerados
+  compartilhado/conflitos.mjs  regras de incompatibilidade (navegador e servidor)
+packs/                os packs gerados no PC
 ```
 
 Nenhuma dependência de npm. Não existe `npm install`.

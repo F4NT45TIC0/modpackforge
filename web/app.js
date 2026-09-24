@@ -104,7 +104,7 @@ async function iniciar() {
     estado.inicio = await api('/api/inicio');
   } catch {
     document.body.innerHTML =
-      '<p style="padding:2rem;font-family:sans-serif;color:#e6e4f0">Não consegui falar com o servidor local. Feche e abra o ModpackForge de novo.</p>';
+      '<p style="padding:2rem;font-family:sans-serif;color:#e6e4f0">Não consegui falar com o servidor. Recarregue a página — e, se o ModpackForge estiver rodando no seu PC, feche e abra de novo.</p>';
     return;
   }
 
@@ -343,7 +343,9 @@ function desenharAvisosDaBusca(avisos = []) {
     .map((a) => {
       const texto = typeof a === 'string' ? a : a.texto;
       const codigo = typeof a === 'string' ? null : a.codigo;
-      const acao = ['CF_CHAVE_INVALIDA', 'CF_SEM_CHAVE'].includes(codigo)
+      // No site o visitante não troca a chave, então o atalho só aparece no PC.
+      const podeTrocar = estado.inicio?.modo !== 'nuvem';
+      const acao = podeTrocar && ['CF_CHAVE_INVALIDA', 'CF_SEM_CHAVE'].includes(codigo)
         ? '<button class="alerta-acao" data-abrir-config="1">Trocar a chave nas configurações</button>'
         : '';
       return `<div>${esc(texto)}${acao}</div>`;
@@ -665,6 +667,17 @@ function fixarVersao(chave, versaoId) {
 
 // ------------------------------------------------------------- exportar
 
+// Links de download da última exportação. Guardados para serem liberados na
+// próxima, senão cada exportação deixaria os arquivos presos na memória.
+let urlsDeDownload = [];
+
+function urlDoArquivo(base64) {
+  const binario = atob(base64);
+  const bytes = new Uint8Array(binario.length);
+  for (let i = 0; i < binario.length; i++) bytes[i] = binario.charCodeAt(i);
+  return URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+}
+
 function abrirExportar() {
   $('#expNome').value = $('#nomePack').value.trim() || 'Meu pack';
   $('#resultadoExportar').hidden = true;
@@ -727,16 +740,25 @@ async function confirmarExportar() {
         : '',
     ].join('');
 
+    // Os arquivos vêm na resposta. No site é a única forma de entregá-los; no PC
+    // eles também ficam gravados em packs/, e o botão de abrir a pasta aparece.
+    for (const url of urlsDeDownload) URL.revokeObjectURL(url);
+    urlsDeDownload = dados.gerados.map((g) => urlDoArquivo(g.base64));
+
     caixa.innerHTML = `
-      <strong>Pronto. ${dados.resumo.total} mods no pack.</strong>
+      <strong>Pronto. ${dados.resumo.total} ${dados.resumo.total === 1 ? 'mod' : 'mods'} no pack.</strong>
       ${dados.resumo.trocas ? `<p>${dados.resumo.trocas} ${dados.resumo.trocas === 1 ? 'versão foi ajustada' : 'versões foram ajustadas'} para os mods abrirem juntos.</p>` : ''}
-      <ul>${dados.gerados.map((g) => `<li>${esc(g.arquivo)} — ${Math.max(1, Math.round(g.tamanho / 1024))} KB</li>`).join('')}</ul>
-      <p class="caminho">${esc(dados.pasta)}</p>
+      <ul class="downloads">${dados.gerados
+        .map(
+          (g, i) => `<li><a class="botao" href="${urlsDeDownload[i]}" download="${esc(g.arquivo)}">Baixar ${esc(g.arquivo)}</a>
+            <span class="tamanho">${Math.max(1, Math.round(g.tamanho / 1024))} KB</span></li>`,
+        )
+        .join('')}</ul>
       ${comoUsar}
       ${blocoServidor}
-      <button class="botao" id="abrirPasta">Abrir a pasta</button>`;
+      ${dados.pasta ? `<p class="caminho">Também salvos em ${esc(dados.pasta)}</p><button class="botao" id="abrirPasta">Abrir a pasta</button>` : ''}`;
 
-    $('#abrirPasta').addEventListener('click', () => {
+    $('#abrirPasta')?.addEventListener('click', () => {
       api('/api/abrir-pasta', { corpo: { pasta: dados.pasta } }).catch(() =>
         mostrarAviso('Não consegui abrir a pasta. O caminho está aí em cima.', 'erro'),
       );
@@ -755,10 +777,31 @@ async function confirmarExportar() {
 
 async function abrirConfig() {
   const config = await api('/api/config');
+  const estadoCf = $('#estadoCf');
+
+  // No site, a chave é de quem hospeda: o visitante só vê se ela está ligada.
+  const local = config.configuravel;
+  $('#ajudaChaveLocal').hidden = !local;
+  $('#ajudaChaveNuvem').hidden = local;
+  $('#chaveCf').hidden = !local;
+  $('#notaCaminhoConfig').hidden = !local;
+  $('#salvarChave').hidden = !local;
+  $('#removerChave').hidden = !local;
+
+  if (!local) {
+    estadoCf.textContent = config.curseforgeAtiva
+      ? 'CurseForge ligada neste site.'
+      : config.curseforgeReprovada
+        ? 'A chave da CurseForge deste site foi recusada. Só a Modrinth aparece na busca.'
+        : 'CurseForge desligada neste site. Só a Modrinth aparece na busca.';
+    estadoCf.dataset.tipo = config.curseforgeAtiva ? 'ok' : '';
+    $('#janelaConfig').showModal();
+    return;
+  }
+
   $('#caminhoConfig').textContent = config.caminhoDaConfig;
   $('#chaveCf').value = '';
   $('#chaveCf').placeholder = config.curseforgeAtiva ? `chave salva (${config.curseforgeFinal})` : 'cole a chave aqui';
-  const estadoCf = $('#estadoCf');
   if (config.curseforgeReprovada) {
     estadoCf.textContent =
       'A CurseForge está recusando a chave guardada. Gere uma nova em console.curseforge.com e cole aqui — chaves antigas às vezes são revogadas.';

@@ -176,15 +176,19 @@
   <div class="janela-corpo">
     <div class="campo-linha">
       <label for="chaveCf">Chave da API da CurseForge</label>
-      <p class="ajuda">
+      <p class="ajuda" id="ajudaChaveLocal">
         A Modrinth funciona sem nada. A CurseForge exige uma chave própria — é gratuita.
         Pegue em <a href="https://console.curseforge.com/#/api-keys" target="_blank" rel="noreferrer">console.curseforge.com</a>,
         cole aqui e os mods de lá entram na busca.
       </p>
+      <p class="ajuda" id="ajudaChaveNuvem" hidden>
+        Neste site a CurseForge é configurada por quem hospeda. A Modrinth funciona
+        sempre; os mods da CurseForge aparecem na busca quando a chave do site está ligada.
+      </p>
       <input type="password" id="chaveCf" class="campo" placeholder="cole a chave aqui" autocomplete="off">
       <p class="estado-config" id="estadoCf"></p>
     </div>
-    <p class="ajuda">A chave fica em <code id="caminhoConfig"></code>, fora da pasta do app.</p>
+    <p class="ajuda" id="notaCaminhoConfig">A chave fica em <code id="caminhoConfig"></code>, fora da pasta do app.</p>
   </div>
   <div class="janela-rodape">
     <button class="botao" id="removerChave" type="button">Remover chave</button>

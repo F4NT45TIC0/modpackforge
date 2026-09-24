@@ -29,21 +29,41 @@ let chaveReprovada = false;
 export const chaveFoiReprovada = () => chaveReprovada;
 export const esquecerReprovacao = () => { chaveReprovada = false; };
 
-export async function temChave() {
-  if (chaveReprovada) return false;
+/**
+ * De onde vem a chave.
+ *
+ * A variável de ambiente CURSEFORGE_API_KEY vence: é assim que funciona quando o
+ * app roda como site (na Vercel não há disco onde guardar configuração, e num
+ * site público quem define a chave é quem hospeda, não o visitante). No PC, sem a
+ * variável, vale a chave salva pela tela de Configurações.
+ */
+export const chaveVemDoAmbiente = () => Boolean(process.env.CURSEFORGE_API_KEY?.trim());
+
+async function chaveAtual() {
+  const doAmbiente = process.env.CURSEFORGE_API_KEY?.trim();
+  if (doAmbiente) return doAmbiente;
   const { chaveCurseforge } = await lerConfig();
-  return Boolean(chaveCurseforge && chaveCurseforge.trim());
+  return chaveCurseforge?.trim() || '';
 }
 
-/** Existe chave gravada, mesmo que ela esteja sendo recusada agora. */
+export async function temChave() {
+  if (chaveReprovada) return false;
+  return Boolean(await chaveAtual());
+}
+
+/** Existe chave configurada, mesmo que ela esteja sendo recusada agora. */
 export async function chaveGravada() {
-  const { chaveCurseforge } = await lerConfig();
-  return Boolean(chaveCurseforge && chaveCurseforge.trim());
+  return Boolean(await chaveAtual());
+}
+
+/** Os últimos caracteres da chave, para a tela mostrar qual está em uso. */
+export async function finalDaChave() {
+  const chave = await chaveAtual();
+  return chave ? `...${chave.slice(-6)}` : null;
 }
 
 async function chamar(caminho, opcoes = {}) {
-  const { chaveCurseforge } = await lerConfig();
-  const chave = chaveCurseforge && chaveCurseforge.trim();
+  const chave = await chaveAtual();
   if (!chave) throw new SemChaveCurseforge();
   try {
     return await pedirJson(BASE + caminho, {

@@ -1,0 +1,14 @@
+{
+  "name": "modpackforge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Monte um modpack de Minecraft e gere um instalador que seus amigos abrem com dois cliques.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "verificar": "node verificar.mjs"
+  }
+}

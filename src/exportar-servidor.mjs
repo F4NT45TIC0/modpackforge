@@ -5,13 +5,11 @@
 // derruba o servidor no boot. Quem decide é o campo server_side da Modrinth.
 
 import { readFile } from 'node:fs/promises';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { planoDeInstalacaoServidor, LOADERS } from './loaders.mjs';
 import { MODS_DO_AMBIENTE } from './jarmeta.mjs';
 import { gerarSlug, nomeDeArquivoSeguro } from './exportar.mjs';
 
-const AQUI = path.dirname(fileURLToPath(import.meta.url));
+const MOLDE_SH = new URL('./instalador-servidor.sh', import.meta.url);
 
 /** Escapa para dentro de uma string com aspas duplas no shell. */
 const aspasShell = (valor) =>
@@ -105,7 +103,7 @@ export async function gerarInstaladorServidor(plano, opcoes) {
     .map((m) => `  "${aspasShell(m.nome)}"`)
     .join('\n');
 
-  const molde = await readFile(path.join(AQUI, 'instalador-servidor.sh'), 'utf8');
+  const molde = await readFile(MOLDE_SH, 'utf8');
 
   const substituicoes = {
     PACK_NOME: aspasShell(nome),

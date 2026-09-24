@@ -1,0 +1,14 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "outputDirectory": "web",
+  "functions": {
+    "api/index.js": {
+      "maxDuration": 60,
+      "includeFiles": "src/**"
+    }
+  },
+  "rewrites": [
+    { "source": "/api/:rota*", "destination": "/api?rota=:rota*" }
+  ]
+}
