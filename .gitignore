@@ -1,0 +1,20 @@
+# Packs gerados pelo app. São saída, não código — e carregam o nome e a
+# seleção de mods de quem gerou.
+packs/
+
+# Logs que os instaladores do Forge e do NeoForge deixam para trás.
+*-installer.jar.log
+*.log
+
+# A chave da CurseForge mora em %APPDATA%\ModpackForge\config.json, fora daqui.
+# Esta linha existe para o caso de alguém mover a configuração para o projeto.
+config.json
+
+# O projeto não usa npm, mas quem clonar pode experimentar.
+node_modules/
+package-lock.json
+
+# Sistema
+Thumbs.db
+desktop.ini
+.DS_Store

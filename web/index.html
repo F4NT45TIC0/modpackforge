@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ModpackForge</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<header class="alvo">
+  <div class="marca">
+    <span class="marca-nome">ModpackForge</span>
+    <span class="marca-sub">monte o pack, mande o arquivo</span>
+  </div>
+
+  <div class="alvo-grupo" role="group" aria-label="Modloader">
+    <span class="alvo-rotulo">Modloader</span>
+    <div class="loaders" id="loaders"></div>
+  </div>
+
+  <div class="alvo-grupo">
+    <label class="alvo-rotulo" for="versaoJogo">Minecraft</label>
+    <select id="versaoJogo" class="campo"></select>
+    <label class="caixa" title="Mostrar snapshots e pré-lançamentos">
+      <input type="checkbox" id="mostrarInstaveis"> snapshots
+    </label>
+  </div>
+
+  <div class="alvo-grupo">
+    <label class="alvo-rotulo" for="versaoLoader">Versão do loader</label>
+    <select id="versaoLoader" class="campo" disabled></select>
+  </div>
+
+  <button class="botao botao-fantasma" id="abrirConfig" type="button">Configurações</button>
+</header>
+
+<main>
+  <!-- navegador de mods ------------------------------------------------- -->
+  <section class="navegador" aria-label="Catálogo de mods">
+    <div class="busca">
+      <input type="search" id="consulta" class="campo campo-busca" placeholder="Buscar mods" autocomplete="off" disabled>
+      <select id="ordem" class="campo campo-curto" disabled>
+        <option value="relevance">Relevância</option>
+        <option value="downloads">Mais baixados</option>
+        <option value="follows">Mais seguidos</option>
+        <option value="updated">Atualizados</option>
+        <option value="newest">Novos</option>
+      </select>
+      <select id="fontes" class="campo campo-curto" disabled>
+        <option value="ambas">Modrinth + CurseForge</option>
+        <option value="modrinth">Só Modrinth</option>
+        <option value="curseforge">Só CurseForge</option>
+      </select>
+    </div>
+
+    <div class="categorias" id="categorias"></div>
+
+    <div class="avisos-busca" id="avisosBusca" hidden></div>
+
+    <ol class="resultados" id="resultados"></ol>
+
+    <div class="rodape-lista" hidden>
+      <button class="botao" id="carregarMais" type="button" hidden>Tentar carregar mais</button>
+      <p class="nota">A lista parou de carregar sozinha.</p>
+    </div>
+  </section>
+
+  <!-- painel do pack ----------------------------------------------------- -->
+  <aside class="pack" aria-label="Seu pack">
+    <header class="pack-topo">
+      <input type="text" id="nomePack" class="campo campo-nome" value="Meu pack" maxlength="80" aria-label="Nome do pack">
+      <p class="pack-conta" id="packConta">Nenhum mod ainda</p>
+    </header>
+
+    <div class="pack-alertas" id="packAlertas"></div>
+
+    <div class="pack-corpo" id="packCorpo">
+      <div class="vazio" id="packVazio">
+        <div class="vazio-slot" aria-hidden="true"></div>
+        <p>Os mods que você escolher aparecem aqui, junto com tudo que eles exigem.</p>
+      </div>
+    </div>
+
+    <footer class="pack-rodape">
+      <p class="pack-peso" id="packPeso"></p>
+      <button class="botao botao-forte" id="abrirExportar" type="button" disabled>Gerar instalador</button>
+    </footer>
+  </aside>
+</main>
+
+<!-- detalhe do mod -------------------------------------------------------- -->
+<dialog class="janela" id="janelaDetalhe">
+  <div class="janela-corpo" id="detalheCorpo"></div>
+  <form method="dialog" class="janela-rodape">
+    <button class="botao" value="fechar">Fechar</button>
+  </form>
+</dialog>
+
+<!-- exportar -------------------------------------------------------------- -->
+<dialog class="janela" id="janelaExportar">
+  <h2 class="janela-titulo">Gerar instalador</h2>
+  <div class="janela-corpo" id="exportarCorpo">
+    <div class="campo-linha">
+      <label for="expNome">Nome do pack</label>
+      <input type="text" id="expNome" class="campo" maxlength="80">
+    </div>
+    <div class="campo-dupla">
+      <div class="campo-linha">
+        <label for="expAutor">Quem montou</label>
+        <input type="text" id="expAutor" class="campo" maxlength="60" placeholder="seu nome">
+      </div>
+      <div class="campo-linha">
+        <label for="expMemoria">RAM reservada para o jogo</label>
+        <select id="expMemoria" class="campo">
+          <option value="2048">2 GB — poucos mods</option>
+          <option value="4096" selected>4 GB — a maioria dos packs</option>
+          <option value="6144">6 GB — packs grandes</option>
+          <option value="8192">8 GB — packs muito grandes</option>
+          <option value="12288">12 GB</option>
+        </select>
+      </div>
+    </div>
+    <p class="ajuda">
+      Quanto da memória do computador o Minecraft pode usar. Mais que o necessário não
+      deixa o jogo mais rápido, e nunca passe da metade da RAM da máquina.
+    </p>
+
+    <fieldset class="formatos">
+      <legend>O que gerar</legend>
+      <p class="ajuda">
+        Na dúvida, deixe os dois marcados: cada um serve a um tipo de launcher, e
+        mandar o arquivo errado faz o pack simplesmente não aparecer no jogo.
+      </p>
+      <label class="formato">
+        <input type="checkbox" name="formato" value="bat" checked>
+        <span class="formato-nome">Instalador .bat — launcher oficial do Minecraft</span>
+        <span class="formato-desc">Para quem abre o jogo pelo launcher que veio com ele. Dois cliques no Windows: instala o modloader, baixa os mods e cria o perfil.</span>
+      </label>
+      <label class="formato">
+        <input type="checkbox" name="formato" value="mrpack" checked>
+        <span class="formato-nome">Arquivo .mrpack — Prism, MultiMC, ATLauncher</span>
+        <span class="formato-desc">Para quem usa um launcher alternativo. Importe direto por Add Instance → Import. O .bat não serve nesses launchers.</span>
+      </label>
+      <label class="formato">
+        <input type="checkbox" name="formato" value="servidor">
+        <span class="formato-nome">Instalador de servidor (.sh)</span>
+        <span class="formato-desc">Para VPS Linux. Monta o servidor com os mesmos mods, deixando de fora os que só funcionam no cliente.</span>
+      </label>
+      <label class="formato">
+        <input type="checkbox" name="formato" value="txt">
+        <span class="formato-nome">Lista em texto</span>
+        <span class="formato-desc">Só os nomes e versões, para conferir ou colar no grupo.</span>
+      </label>
+    </fieldset>
+
+    <div class="campo-linha" id="linhaPorta" hidden>
+      <label for="expPorta">Porta do servidor</label>
+      <input type="number" id="expPorta" class="campo campo-curto" value="25565" min="1" max="65535">
+    </div>
+
+    <div class="resultado-exportar" id="resultadoExportar" hidden></div>
+  </div>
+  <div class="janela-rodape">
+    <button class="botao" id="fecharExportar" type="button">Cancelar</button>
+    <button class="botao botao-forte" id="confirmarExportar" type="button">Gerar</button>
+  </div>
+</dialog>
+
+<!-- configurações --------------------------------------------------------- -->
+<dialog class="janela" id="janelaConfig">
+  <h2 class="janela-titulo">Configurações</h2>
+  <div class="janela-corpo">
+    <div class="campo-linha">
+      <label for="chaveCf">Chave da API da CurseForge</label>
+      <p class="ajuda">
+        A Modrinth funciona sem nada. A CurseForge exige uma chave própria — é gratuita.
+        Pegue em <a href="https://console.curseforge.com/#/api-keys" target="_blank" rel="noreferrer">console.curseforge.com</a>,
+        cole aqui e os mods de lá entram na busca.
+      </p>
+      <input type="password" id="chaveCf" class="campo" placeholder="cole a chave aqui" autocomplete="off">
+      <p class="estado-config" id="estadoCf"></p>
+    </div>
+    <p class="ajuda">A chave fica em <code id="caminhoConfig"></code>, fora da pasta do app.</p>
+  </div>
+  <div class="janela-rodape">
+    <button class="botao" id="removerChave" type="button">Remover chave</button>
+    <button class="botao" id="fecharConfig" type="button">Fechar</button>
+    <button class="botao botao-forte" id="salvarChave" type="button">Salvar</button>
+  </div>
+</dialog>
+
+<div class="aviso-flutuante" id="avisoFlutuante" role="status" aria-live="polite" hidden></div>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

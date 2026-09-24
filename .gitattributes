@@ -1,0 +1,13 @@
+# Normalização de fim de linha.
+#
+# O Git converte para CRLF no checkout do Windows. Num script de shell isso é
+# fatal: o `\r` vira parte do nome do interpretador e o Linux responde
+# "bad interpreter: /usr/bin/env bash^M". Estes arquivos ficam com LF sempre.
+*.sh text eol=lf
+
+# O .bat é o caso oposto: o cmd do Windows quer CRLF.
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# O resto o Git normaliza sozinho.
+* text=auto
