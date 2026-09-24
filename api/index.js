@@ -1,10 +1,16 @@
 // Função da Vercel.
 //
 // Toda chamada a /api/* é reescrita para cá (ver vercel.json) e segue para o
-// mesmo tratador que o servidor local usa. Não há lógica aqui de propósito:
-// qualquer diferença entre o PC e o site mora em src/api.mjs, à vista.
+// mesmo tratador que o servidor local usa. A única coisa que este arquivo decide
+// é dizer que está no site — sem depender de nenhuma variável de ambiente que a
+// configuração do projeto possa desligar.
+//
+// A Vercel chama GET(request, contexto). O contexto não interessa ao tratador,
+// por isso a função intermediária: repassá-lo direto o confundiria com as opções.
 
 import { tratarApi } from '../src/api.mjs';
 
-export const GET = tratarApi;
-export const POST = tratarApi;
+const noSite = (request) => tratarApi(request, { nuvem: true });
+
+export const GET = noSite;
+export const POST = noSite;

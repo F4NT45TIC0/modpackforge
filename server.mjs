@@ -17,6 +17,11 @@ const PASTA_WEB = path.join(AQUI, 'web');
 const PORTA_INICIAL = Number(process.env.PORTA) || 7477;
 const LIMITE_CORPO = 2 * 1024 * 1024;
 
+// SIMULAR_SITE=1 faz este servidor responder como o site da Vercel responderia
+// (downloads em vez de pasta, chave da CurseForge não configurável). Só serve
+// para testar a interface do site sem publicar.
+const SIMULAR_SITE = process.env.SIMULAR_SITE === '1';
+
 /**
  * Carimbo do código que este processo carregou.
  *
@@ -111,7 +116,7 @@ async function repassarParaApi(req, res) {
     body: corpo,
   });
 
-  const resposta = await tratarApi(pedido);
+  const resposta = await tratarApi(pedido, { nuvem: SIMULAR_SITE });
   const dados = Buffer.from(await resposta.arrayBuffer());
   res.writeHead(resposta.status, {
     ...Object.fromEntries(resposta.headers),
@@ -159,6 +164,10 @@ function ouvir(porta, tentativasRestantes = 10) {
       console.log(`  ATENÇÃO: a porta ${PORTA_INICIAL} já estava ocupada.`);
       console.log('  Outro ModpackForge está rodando. Feche o antigo, senão o navegador');
       console.log('  pode continuar falando com ele e usando código velho.');
+      console.log('');
+    }
+    if (SIMULAR_SITE) {
+      console.log('  SIMULANDO O SITE: a API responde como responderia na Vercel.');
       console.log('');
     }
     console.log('  ModpackForge rodando em ' + endereco);

@@ -188,6 +188,15 @@ uma função (`api/index.js`) e a interface é servida como site estático.
 
 Depois disso, todo push na branch `main` publica sozinho.
 
+Para conferir que o site subiu, abra `https://<seu-projeto>.vercel.app/api/inicio`:
+tem que aparecer um JSON com `"modo":"nuvem"`.
+
+Para ver a interface exatamente como o site mostra, sem publicar nada:
+
+```
+set SIMULAR_SITE=1 && node server.mjs
+```
+
 ### O que muda no site
 
 | | No seu PC | No site |

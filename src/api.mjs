@@ -27,12 +27,18 @@ import { limparCache } from './http.mjs';
 const RAIZ = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const PASTA_PACKS = path.join(RAIZ, 'packs');
 
-/** A Vercel define VERCEL=1 em todo ambiente dela. */
-export const NA_NUVEM = Boolean(process.env.VERCEL);
+// Onde este código está rodando NÃO é adivinhado por variável de ambiente.
+//
+// Quem chama o tratador diz: api/index.js (a função da Vercel) sempre passa
+// { nuvem: true }, e o server.mjs do PC passa false. Antes a decisão vinha da
+// variável VERCEL, que a Vercel só expõe se uma opção do projeto estiver ligada.
+// Com ela desligada o código se achava no PC, exigia Host localhost e o site
+// inteiro respondia 403. O ponto de entrada sabe onde está; a configuração do
+// projeto, não necessariamente.
 
 // Num site público cada pack custa minutos de função e centenas de chamadas às
 // lojas. O limite menor protege a conta de quem hospeda de um abuso barato.
-const LIMITE_MODS = NA_NUVEM ? 150 : 400;
+const limiteDeMods = (nuvem) => (nuvem ? 150 : 400);
 const LIMITE_CORPO = 2 * 1024 * 1024;
 
 /** Identifica o código que está respondendo. O servidor local preenche no arranque. */
@@ -54,9 +60,10 @@ function validarAlvo(params) {
   return { loader, mc };
 }
 
-function validarItens(itens) {
+function validarItens(itens, nuvem) {
+  const limite = limiteDeMods(nuvem);
   if (!Array.isArray(itens)) throw falha(400, 'Lista de mods ausente');
-  if (itens.length > LIMITE_MODS) throw falha(400, `Limite de ${LIMITE_MODS} mods por pack`);
+  if (itens.length > limite) throw falha(400, `Limite de ${limite} mods por pack`);
   return itens.map((i) => {
     if (!['modrinth', 'curseforge'].includes(i?.fonte)) throw falha(400, 'Fonte inválida');
     if (!/^[\w-]{1,32}$/.test(String(i.projetoId ?? ''))) throw falha(400, 'Id de projeto inválido');
@@ -73,14 +80,14 @@ const RESUMO_VAZIO = { total: 0, escolhidos: 0, dependencias: 0, bloqueios: 0, a
 // ------------------------------------------------------------------- rotas
 
 const rotas = {
-  'GET inicio': async () => {
+  'GET inicio': async ({ nuvem }) => {
     const [versoes, config, chaveCf] = await Promise.all([
       versoesDoJogo(),
       lerConfig(),
       curseforge.temChave(),
     ]);
     return {
-      modo: NA_NUVEM ? 'nuvem' : 'local',
+      modo: nuvem ? 'nuvem' : 'local',
       loaders: LOADERS,
       versoesDoJogo: versoes,
       categorias: modrinth.CATEGORIAS,
@@ -90,7 +97,7 @@ const rotas = {
         ultimoLoader: config.ultimoLoader,
         ultimaVersaoJogo: config.ultimaVersaoJogo,
       },
-      pastaDePacks: NA_NUVEM ? null : PASTA_PACKS,
+      pastaDePacks: nuvem ? null : PASTA_PACKS,
     };
   },
 
@@ -153,9 +160,9 @@ const rotas = {
     };
   },
 
-  'GET projeto': async ({ params }) => {
+  'GET projeto': async ({ params, nuvem }) => {
     const { loader, mc } = validarAlvo(params);
-    const [item] = validarItens([{ fonte: params.fonte, projetoId: params.id }]);
+    const [item] = validarItens([{ fonte: params.fonte, projetoId: params.id }], nuvem);
     const provider = item.fonte === 'modrinth' ? modrinth : curseforge;
     const [projeto, versoes] = await Promise.all([
       provider.projeto(item.projetoId),
@@ -164,18 +171,18 @@ const rotas = {
     return { projeto, versoes };
   },
 
-  'POST resolver': async ({ corpo }) => {
+  'POST resolver': async ({ corpo, nuvem }) => {
     const { loader, mc } = validarAlvo(corpo);
-    const itens = validarItens(corpo.itens ?? []);
+    const itens = validarItens(corpo.itens ?? [], nuvem);
     if (!itens.length) {
       return { alvo: { loader, mc }, arquivos: [], conflitos: [], faltando: [], erros: [], manuais: [], trocas: [], resumo: RESUMO_VAZIO };
     }
     return resolver({ loader, mc, itens });
   },
 
-  'POST exportar': async ({ corpo }) => {
+  'POST exportar': async ({ corpo, nuvem }) => {
     const { loader, mc } = validarAlvo(corpo);
-    const itens = validarItens(corpo.itens ?? []);
+    const itens = validarItens(corpo.itens ?? [], nuvem);
     if (!itens.length) throw falha(400, 'O pack está vazio');
 
     const nome = String(corpo.nome ?? '').trim().slice(0, 80) || 'Meu pack';
@@ -220,7 +227,7 @@ const rotas = {
     // No PC os arquivos também ficam em packs/. No site não há disco onde
     // gravar: eles voltam só na resposta, e a interface oferece o download.
     let pasta = null;
-    if (!NA_NUVEM) {
+    if (!nuvem) {
       pasta = path.join(PASTA_PACKS, gerarSlug(nome));
       await mkdir(pasta, { recursive: true });
       for (const a of arquivos) await writeFile(path.join(pasta, a.arquivo), a.conteudo);
@@ -241,20 +248,20 @@ const rotas = {
     };
   },
 
-  'GET config': async () => ({
+  'GET config': async ({ nuvem }) => ({
     // Nunca devolvemos a chave inteira. No site, nem o final: quem visita não
     // tem por que saber nada sobre a chave de quem hospeda.
-    configuravel: !NA_NUVEM,
+    configuravel: !nuvem,
     curseforgeAtiva: (await curseforge.chaveGravada()) && !curseforge.chaveFoiReprovada(),
     curseforgeReprovada: curseforge.chaveFoiReprovada(),
-    curseforgeFinal: NA_NUVEM ? null : await curseforge.finalDaChave(),
+    curseforgeFinal: nuvem ? null : await curseforge.finalDaChave(),
     chaveDoAmbiente: curseforge.chaveVemDoAmbiente(),
-    caminhoDaConfig: NA_NUVEM ? null : caminhoDaConfig,
-    pastaDePacks: NA_NUVEM ? null : PASTA_PACKS,
+    caminhoDaConfig: nuvem ? null : caminhoDaConfig,
+    pastaDePacks: nuvem ? null : PASTA_PACKS,
   }),
 
-  'POST config/curseforge': async ({ corpo }) => {
-    if (NA_NUVEM) {
+  'POST config/curseforge': async ({ corpo, nuvem }) => {
+    if (nuvem) {
       throw falha(
         403,
         'Neste site a chave da CurseForge é definida por quem hospeda, na variável CURSEFORGE_API_KEY.',
@@ -273,8 +280,8 @@ const rotas = {
     return { curseforgeAtiva: true, curseforgeFinal: `...${chave.slice(-6)}` };
   },
 
-  'POST abrir-pasta': async ({ corpo }) => {
-    if (NA_NUVEM) throw falha(404, 'Rota não encontrada');
+  'POST abrir-pasta': async ({ corpo, nuvem }) => {
+    if (nuvem) throw falha(404, 'Rota não encontrada');
     const alvo = path.resolve(String(corpo.pasta ?? PASTA_PACKS));
     // Só abrimos pastas dentro da área do app.
     if (alvo !== PASTA_PACKS && !alvo.startsWith(PASTA_PACKS + path.sep)) {
@@ -298,9 +305,11 @@ const EH_LOCAL = /^(localhost|127\.0\.0\.1)(:\d+)?$/;
  * roubar, e sem cabeçalhos de CORS outro site não lê as respostas. Mantê-la lá
  * só arriscaria recusar o próprio site, caso a Vercel repasse um Host interno.
  */
-function chamadaPermitida(request) {
-  if (NA_NUVEM) return true;
-  const host = request.headers.get('host') ?? '';
+function chamadaPermitida(request, nuvem) {
+  if (nuvem) return true;
+  // O cabeçalho Host é o que o navegador mandou; sem ele, vale o host da URL —
+  // que o server.mjs monta a partir do mesmo cabeçalho, então dizem a mesma coisa.
+  const host = request.headers.get('host') ?? new URL(request.url).host;
   if (!EH_LOCAL.test(host)) return false;
   const origem = request.headers.get('origin');
   if (!origem) return true;
@@ -346,9 +355,13 @@ async function lerCorpo(request) {
   }
 }
 
-/** Atende qualquer chamada a /api/*. */
-export async function tratarApi(request) {
-  if (!chamadaPermitida(request)) return responderJson(403, { erro: 'Origem não permitida' });
+/**
+ * Atende qualquer chamada a /api/*.
+ * @param {Request} request
+ * @param {{ nuvem?: boolean }} ambiente  quem chama diz onde está rodando
+ */
+export async function tratarApi(request, { nuvem = false } = {}) {
+  if (!chamadaPermitida(request, nuvem)) return responderJson(403, { erro: 'Origem não permitida' });
 
   const url = new URL(request.url);
   const nome = nomeDaRota(url);
@@ -359,7 +372,7 @@ export async function tratarApi(request) {
     const params = Object.fromEntries(url.searchParams);
     delete params.rota;
     const corpo = await lerCorpo(request);
-    return responderJson(200, await rota({ params, corpo }));
+    return responderJson(200, await rota({ params, corpo, nuvem }));
   } catch (erro) {
     const status = erro.status ?? (erro.codigo === 'CF_SEM_CHAVE' ? 428 : 502);
     if (!erro.status && !erro.codigo) console.error(`[${request.method} ${nome}]`, erro.message);
