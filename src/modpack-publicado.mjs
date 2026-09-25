@@ -13,6 +13,11 @@ const DEPENDENCIAS = [
 
 const aspas = (valor) => `'${String(valor).replace(/'/g, "'\\''")}'`;
 
+export function modsEmbutidos(entradas) {
+  return [...entradas.keys()].filter((nome) =>
+    /^(overrides|client-overrides|server-overrides)\/mods\/.+\.jar$/i.test(nome));
+}
+
 function caminhoSeguro(valor, { paraUnzip = false } = {}) {
   const p = String(valor ?? '');
   const invalidos = paraUnzip ? /[\\|*?\[\]\x00-\x1f]/ : /[\\|\x00-\x1f]/;
@@ -74,7 +79,8 @@ export async function prepararModpackPublicado(projetoId, versaoId, {
   const base = baseLida ?? await lerModpackPublicado(projetoId, versaoId);
   const { projeto, versao, indice, entradas, mc, loader, loaderVersao } = base;
   const remover = new Set(removidos);
-  if ([...remover].some((caminho) => !base.arquivos.some((a) => a.caminho === caminho))) {
+  const embutidos = new Set(modsEmbutidos(entradas));
+  if ([...remover].some((caminho) => !embutidos.has(caminho) && !base.arquivos.some((a) => a.caminho === caminho))) {
     throw new Error('A remoção contém um arquivo que não existe no modpack.');
   }
   const arquivos = base.arquivos.filter((a) => !remover.has(a.caminho));
@@ -156,7 +162,7 @@ export async function prepararModpackPublicado(projetoId, versaoId, {
   let tamanhoOverrides = 0;
   for (const prefixo of ['overrides/', 'server-overrides/']) {
     for (const [origem, entrada] of entradas) {
-      if (!origem.startsWith(prefixo) || origem.endsWith('/')) continue;
+      if (!origem.startsWith(prefixo) || origem.endsWith('/') || remover.has(origem)) continue;
       const destino = origem.slice(prefixo.length);
       if (!caminhoSeguro(destino, { paraUnzip: true }) || ![0, 8].includes(entrada.metodo)) throw new Error('O .mrpack contém override inválido.');
       if (['eula.txt', 'run.sh', 'iniciar.sh', 'server.jar'].includes(destino)) continue;
@@ -190,6 +196,7 @@ export async function prepararModpackPublicado(projetoId, versaoId, {
   for (const [chave, valor] of Object.entries(valores)) script = script.split(`@@${chave}@@`).join(valor);
   return {
     projeto, versao, indice: indiceEditado,
+    removidosEmbutidos: [...remover].filter((caminho) => embutidos.has(caminho)),
     nomeArquivo: `instalar-servidor-${gerarSlug(nome)}.sh`,
     script: Buffer.from(script.replace(/\r\n/g, '\n'), 'utf8'),
     resumo: { nome, mc, loader, loaderVersao, arquivos: arquivosServidor.length, excluidos: excluidos.length, overrides: overrides.length },

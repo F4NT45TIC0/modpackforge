@@ -95,7 +95,7 @@ function criarIndice(indice, offset) {
 }
 
 /** Baixa o original diretamente da Modrinth e troca somente o índice ZIP. */
-export async function montarMrpackEditado(url, tamanhoEsperado, indice) {
+export async function montarMrpackEditado(url, tamanhoEsperado, indice, removidosEmbutidos = []) {
   const alvo = new URL(url);
   if (alvo.protocol !== 'https:' || alvo.hostname !== 'cdn.modrinth.com') throw new Error('URL do .mrpack inesperada.');
   const resposta = await fetch(url);
@@ -105,6 +105,10 @@ export async function montarMrpackEditado(url, tamanhoEsperado, indice) {
   if (original.size >= 0xffffffff) throw new Error('Este .mrpack usa ZIP64, que ainda não é suportado.');
 
   const { entradas, offset } = await lerDiretorio(original);
+  const remover = new Set(removidosEmbutidos);
+  if ([...remover].some((nome) => nome === 'modrinth.index.json' || !entradas.some((e) => e.nome === nome))) {
+    throw new Error('A remoção do .mrpack contém arquivo desconhecido.');
+  }
   const ordenadas = [...entradas].sort((a, b) => a.local - b.local);
   const partes = [];
   const centrais = [];
@@ -113,7 +117,7 @@ export async function montarMrpackEditado(url, tamanhoEsperado, indice) {
     const entrada = ordenadas[i];
     const fim = ordenadas[i + 1]?.local ?? offset;
     if (fim <= entrada.local || fim > offset) throw new Error('Entradas do ZIP sobrepostas.');
-    if (entrada.nome === 'modrinth.index.json') continue;
+    if (entrada.nome === 'modrinth.index.json' || remover.has(entrada.nome)) continue;
     partes.push(original.slice(entrada.local, fim));
     const central = entrada.central.slice();
     w32(new DataView(central.buffer), 42, posicao);
@@ -129,7 +133,7 @@ export async function montarMrpackEditado(url, tamanhoEsperado, indice) {
   const fim = new Uint8Array(22);
   const fv = new DataView(fim.buffer);
   w32(fv, 0, 0x06054b50);
-  const quantidade = entradas.length;
+  const quantidade = entradas.length - remover.size;
   w16(fv, 8, quantidade);
   w16(fv, 10, quantidade);
   w32(fv, 12, tamanhoCentral);

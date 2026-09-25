@@ -22,7 +22,7 @@ Dois cliques em **`ModpackForge.bat`**. Ele abre o navegador na interface.
 
 Para baixar um **modpack pronto**, abra a aba correspondente, escolha uma versão e clique em **Baixar**. O ModpackForge entrega o `.mrpack` original diretamente da Modrinth e um `.sh` para instalar o lado servidor numa VPS Linux. O tamanho do `.mrpack` não passa pela função da Vercel; packs de mais de 64 MB funcionam.
 
-Para personalizar um modpack publicado, clique em **Editar** na versão desejada. O painel mostra os mods, shaders e recursos do pack original, além de todos os caminhos de configurações e outros arquivos incluídos. Você pode tirar e restaurar arquivos originais, buscar e adicionar mais mods e gerar um novo `.mrpack` e o `.sh` correspondente. O `.mrpack` editado é montado no navegador com os bytes originais dos overrides, preservando configurações, scripts e recursos do autor. A versão do Minecraft e o modloader ficam fixos aos do pack original durante a edição.
+Para personalizar um modpack publicado, clique em **Editar** na versão desejada. O painel mostra os mods, shaders e recursos do pack original, inclusive mods `.jar` embutidos em `overrides/mods/`, além de todos os caminhos de configurações e outros arquivos incluídos. Você pode tirar e restaurar arquivos originais, buscar e adicionar mais mods e gerar um novo `.mrpack` e o `.sh` correspondente. O `.mrpack` editado é montado no navegador com os bytes originais dos overrides restantes, preservando configurações, scripts e recursos do autor. A versão do Minecraft e o modloader ficam fixos aos do pack original durante a edição.
 
 O resultado sai em `packs/<nome-do-pack>/`.
 

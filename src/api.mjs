@@ -24,7 +24,7 @@ import { gerarBat, gerarMrpack, gerarListaTexto, gerarSlug } from './exportar.mj
 import { gerarInstaladorServidor, gerarAjudaWindows } from './exportar-servidor.mjs';
 import { lerConfig, gravarConfig, caminhoDaConfig } from './store.mjs';
 import { limparCache } from './http.mjs';
-import { lerModpackPublicado, prepararModpackPublicado } from './modpack-publicado.mjs';
+import { lerModpackPublicado, modsEmbutidos, prepararModpackPublicado } from './modpack-publicado.mjs';
 
 const RAIZ = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const PASTA_PACKS = path.join(RAIZ, 'packs');
@@ -246,8 +246,14 @@ const rotas = {
         tamanho: base.indice.files.find((f) => f.path === a.caminho)?.fileSize ?? 0,
       };
     });
+    const embutidos = modsEmbutidos(base.entradas);
+    arquivos.push(...embutidos.map((caminho) => ({
+      caminho, nome: caminho.split('/').at(-1), slug: null, projetoId: null, versaoId: null,
+      tipo: 'mod', icone: null, tamanho: base.entradas.get(caminho).descomprimido, embutido: true,
+    })));
+    const nomesEmbutidos = new Set(embutidos);
     const configuracoes = [...base.entradas.keys()].filter((nome) =>
-      /^(overrides|client-overrides|server-overrides)\//.test(nome) && !nome.endsWith('/'));
+      /^(overrides|client-overrides|server-overrides)\//.test(nome) && !nome.endsWith('/') && !nomesEmbutidos.has(nome));
     return {
       projeto: { id: base.projeto.id, nome: base.projeto.nome },
       versao: { id: base.versao.id, nome: base.versao.nome, arquivo: base.versao.arquivo },
@@ -300,6 +306,7 @@ const rotas = {
       indice: preparado.indice,
       servidor: { nome: preparado.nomeArquivo, base64: preparado.script.toString('base64') },
       resumo: preparado.resumo,
+      removidosEmbutidos: preparado.removidosEmbutidos,
       adicionais: extras.length,
     };
   },

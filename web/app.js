@@ -731,7 +731,7 @@ function desenharOriginais() {
   const ativos = arquivosOriginaisAtivos();
   const linha = (a) => `<li class="pack-item" data-origem="escolhido">
     <span class="pack-slot">${a.icone ? `<img src="${esc(a.icone)}" alt="" loading="lazy">` : ''}</span>
-    <span><span class="pack-nome" title="${esc(a.caminho)}">${esc(a.nome)}</span><span class="pack-versao">${esc(a.caminho)}</span></span>
+    <span><span class="pack-nome" title="${esc(a.caminho)}">${esc(a.nome)}</span><span class="pack-versao">${a.embutido ? 'Mod incluído no arquivo · ' : ''}${esc(a.caminho)}</span></span>
     <button class="pack-remover" data-remover-original="${esc(a.caminho)}" title="Tirar do modpack" aria-label="Tirar ${esc(a.nome)} do modpack">${icone('menos')}</button>
   </li>`;
   return `<div class="base-importada">
@@ -1110,7 +1110,7 @@ async function exportarImportado(formatos) {
   const gerados = [];
   if (formatos.includes('mrpack')) {
     $('#confirmarExportar').textContent = `Baixando ${formatarTamanho(dados.origem.tamanho)}…`;
-    const blob = await montarMrpackEditado(dados.origem.url, dados.origem.tamanho, dados.indice);
+    const blob = await montarMrpackEditado(dados.origem.url, dados.origem.tamanho, dados.indice, dados.removidosEmbutidos);
     const nome = `${($('#expNome').value.trim() || 'modpack-editado').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 70) || 'modpack-editado'}.mrpack`;
     gerados.push({ nome, url: URL.createObjectURL(blob), tamanho: blob.size });
   }
