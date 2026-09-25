@@ -17,10 +17,12 @@ Dois cliques em **`ModpackForge.bat`**. Ele abre o navegador na interface.
 3. Para montar seu pack, clique em **Adicionar**. A partir daí a interface trabalha sozinha:
    - as **dependências entram junto** e aparecem marcadas com "exigido por";
    - os mods **incompatíveis ficam bloqueados**, com o motivo escrito ao lado.
-   - **Remover todos os mods** tira de uma vez os mods escolhidos; shaders, recursos e dependências necessárias para eles permanecem no pack.
+   - **Remover todos os mods** tira de uma vez os mods escolhidos; ao editar um modpack publicado, tira também os mods originais. Shaders, recursos e configurações permanecem.
 4. Clique em **Gerar instalador**. Shaders entram em `shaderpacks/`, pacotes de recursos em `resourcepacks/`, e o instalador adiciona um carregador de shaders compatível quando necessário. No detalhe de cada shader ou pacote de recursos também há um link para baixar só o `.zip`.
 
-Para baixar um **modpack pronto**, abra a aba correspondente, escolha uma versão e clique em **Baixar**. O ModpackForge entrega o `.mrpack` para importar no launcher e um `.sh` para instalar o lado servidor numa VPS Linux.
+Para baixar um **modpack pronto**, abra a aba correspondente, escolha uma versão e clique em **Baixar**. O ModpackForge entrega o `.mrpack` original diretamente da Modrinth e um `.sh` para instalar o lado servidor numa VPS Linux. O tamanho do `.mrpack` não passa pela função da Vercel; packs de mais de 64 MB funcionam.
+
+Para personalizar um modpack publicado, clique em **Editar** na versão desejada. O painel mostra os mods, shaders e recursos do pack original, além de todos os caminhos de configurações e outros arquivos incluídos. Você pode tirar e restaurar arquivos originais, buscar e adicionar mais mods e gerar um novo `.mrpack` e o `.sh` correspondente. O `.mrpack` editado é montado no navegador com os bytes originais dos overrides, preservando configurações, scripts e recursos do autor. A versão do Minecraft e o modloader ficam fixos aos do pack original durante a edição.
 
 O resultado sai em `packs/<nome-do-pack>/`.
 
@@ -33,11 +35,13 @@ O resultado sai em `packs/<nome-do-pack>/`.
 | `<nome>.mrpack` | Quem usa Prism, ATLauncher ou o app da Modrinth. |
 | `<nome> - lista.txt` | Só para conferir ou colar no grupo. |
 
-Ao baixar um modpack publicado, o `.mrpack` original e o `.sh` gerado também ficam em `packs/<nome-do-modpack>/` no modo local.
+Ao baixar um modpack publicado no modo local, só o `.sh` gerado também fica em `packs/<nome-do-modpack>/`; o `.mrpack` original é baixado pelo link direto da Modrinth. O `.mrpack` editado é gerado para download no navegador.
 
 ### Serverpack de um modpack publicado
 
 O `.sh` lê a versão e o modloader declarados no `.mrpack`, baixa os arquivos do servidor, confere SHA-1 e aplica `overrides/` e `server-overrides/` na ordem do formato. Ele exclui arquivos marcados como exclusivos do cliente e confere o lado servidor dos mods hospedados na Modrinth, pois alguns packs marcam todos os mods como necessários no servidor. Precisa de Java, `unzip`, `sha1sum` e `curl` ou `wget` na VPS. No primeiro uso, pergunta onde instalar e pede o aceite do EULA.
+
+O `.sh` de um pack editado baixa o `.mrpack` **original** para extrair os overrides e baixa a lista **editada** de mods. Assim, ele mantém as configurações originais sem precisar enviar um arquivo grande para a Vercel. A importação de packs publicados requer `.mrpack` no formato ZIP comum; arquivos ZIP64 (a partir de 4 GB) ainda não são suportados.
 
 ### O que o `.bat` faz na máquina do seu amigo
 

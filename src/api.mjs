@@ -11,6 +11,7 @@
 // definida por quem hospeda.
 
 import { writeFile, mkdir } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,7 +24,7 @@ import { gerarBat, gerarMrpack, gerarListaTexto, gerarSlug } from './exportar.mj
 import { gerarInstaladorServidor, gerarAjudaWindows } from './exportar-servidor.mjs';
 import { lerConfig, gravarConfig, caminhoDaConfig } from './store.mjs';
 import { limparCache } from './http.mjs';
-import { prepararModpackPublicado } from './modpack-publicado.mjs';
+import { lerModpackPublicado, prepararModpackPublicado } from './modpack-publicado.mjs';
 
 const RAIZ = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const PASTA_PACKS = path.join(RAIZ, 'packs');
@@ -81,6 +82,25 @@ function validarItens(itens, nuvem) {
 }
 
 const RESUMO_VAZIO = { total: 0, escolhidos: 0, dependencias: 0, bloqueios: 0, avisos: 0, manuais: 0, tamanho: 0 };
+
+function validarIdsModpack(projetoId, versaoId) {
+  if (!/^[\w-]{1,32}$/.test(String(projetoId ?? '')) || !/^[\w-]{1,40}$/.test(String(versaoId ?? ''))) {
+    throw falha(400, 'Modpack ou versão inválida');
+  }
+}
+
+function arquivoDoPlano(a) {
+  const tipo = a.tipo === 'shader' ? 'shaderpacks' : a.tipo === 'resourcepack' ? 'resourcepacks' : 'mods';
+  return {
+    path: `${tipo}/${a.arquivo.nome}`,
+    hashes: { sha1: a.arquivo.sha1, ...(a.arquivo.sha512 ? { sha512: a.arquivo.sha512 } : {}) },
+    env: { client: 'required', server: tipo !== 'mods' || a.ladoServidor === 'unsupported' ? 'unsupported' : 'required' },
+    downloads: [a.arquivo.url],
+    fileSize: a.arquivo.tamanho ?? 0,
+    projetoId: a.fonte === 'modrinth' ? a.projetoId : null,
+    versaoId: a.fonte === 'modrinth' ? a.versaoId : null,
+  };
+}
 
 // ------------------------------------------------------------------- rotas
 
@@ -192,7 +212,7 @@ const rotas = {
   'POST baixar-modpack': async ({ corpo, nuvem }) => {
     const projetoId = String(corpo.projetoId ?? '');
     const versaoId = String(corpo.versaoId ?? '');
-    if (!/^[\w-]{1,32}$/.test(projetoId) || !/^[\w-]{1,40}$/.test(versaoId)) throw falha(400, 'Modpack ou versão inválida');
+    validarIdsModpack(projetoId, versaoId);
     const preparado = await prepararModpackPublicado(projetoId, versaoId, {
       memoriaMb: corpo.memoriaMb, porta: corpo.porta,
     });
@@ -200,7 +220,6 @@ const rotas = {
     if (!nuvem) {
       pasta = path.join(PASTA_PACKS, gerarSlug(preparado.resumo.nome));
       await mkdir(pasta, { recursive: true });
-      await writeFile(path.join(pasta, preparado.versao.arquivo.nome), preparado.mrpack);
       await writeFile(path.join(pasta, preparado.nomeArquivo), preparado.script);
     }
     return {
@@ -208,6 +227,80 @@ const rotas = {
       mrpack: { nome: preparado.versao.arquivo.nome, url: preparado.versao.arquivo.url },
       servidor: { nome: preparado.nomeArquivo, base64: preparado.script.toString('base64') },
       resumo: preparado.resumo,
+    };
+  },
+
+  'GET importar-modpack': async ({ params }) => {
+    validarIdsModpack(params.projetoId, params.versaoId);
+    const base = await lerModpackPublicado(params.projetoId, params.versaoId);
+    const projetos = await modrinth.projetosEmLote(base.arquivos.map((a) => a.projetoId));
+    const porId = new Map(projetos.map((p) => [p.id, p]));
+    const arquivos = base.arquivos.map((a) => {
+      const projeto = porId.get(a.projetoId);
+      const tipo = a.caminho.startsWith('shaderpacks/') ? 'shader'
+        : a.caminho.startsWith('resourcepacks/') ? 'resourcepack'
+          : a.caminho.startsWith('mods/') ? 'mod' : 'arquivo';
+      return {
+        caminho: a.caminho, nome: projeto?.nome ?? a.caminho.split('/').at(-1), slug: projeto?.slug ?? null,
+        projetoId: a.projetoId, versaoId: a.versaoId, tipo, icone: projeto?.icone ?? null,
+        tamanho: base.indice.files.find((f) => f.path === a.caminho)?.fileSize ?? 0,
+      };
+    });
+    const configuracoes = [...base.entradas.keys()].filter((nome) =>
+      /^(overrides|client-overrides|server-overrides)\//.test(nome) && !nome.endsWith('/'));
+    return {
+      projeto: { id: base.projeto.id, nome: base.projeto.nome },
+      versao: { id: base.versao.id, nome: base.versao.nome, arquivo: base.versao.arquivo },
+      alvo: { mc: base.mc, loader: base.loader, loaderVersao: base.loaderVersao },
+      arquivos, configuracoes,
+    };
+  },
+
+  'POST exportar-modpack-editado': async ({ corpo, nuvem }) => {
+    validarIdsModpack(corpo.projetoId, corpo.versaoId);
+    const removidos = corpo.removidos ?? [];
+    if (!Array.isArray(removidos) || removidos.length > 1500 ||
+        removidos.some((p) => typeof p !== 'string' || p.length > 240)) throw falha(400, 'Arquivos removidos inválidos');
+    const itens = validarItens(corpo.itens ?? [], nuvem);
+    const base = await lerModpackPublicado(corpo.projetoId, corpo.versaoId);
+    const ativos = base.arquivos.filter((a) => !removidos.includes(a.caminho));
+    const porProjeto = new Map(ativos.filter((a) => a.projetoId).map((a) => [a.projetoId, a]));
+    if (itens.some((i) => i.fonte === 'modrinth' && porProjeto.has(i.projetoId))) {
+      throw falha(409, 'Esse mod já está no modpack original. Remova a versão original antes de adicionar outra.');
+    }
+    const plano = itens.length ? await resolver({ loader: base.loader, mc: base.mc, itens }) : null;
+    if (plano && (plano.resumo.bloqueios || plano.faltando.length || plano.erros.length)) {
+      throw falha(409, 'Os mods adicionais têm conflitos ou arquivos sem versão. Resolva antes de gerar.');
+    }
+    const extras = [];
+    for (const a of plano?.arquivos ?? []) {
+      const original = a.fonte === 'modrinth' ? porProjeto.get(a.projetoId) : null;
+      if (original) {
+        if (a.fixado && original.versaoId !== a.versaoId) {
+          throw falha(409, `O mod adicional exige outra versão de ${a.nome}. Remova a versão original e adicione a exigida.`);
+        }
+        continue;
+      }
+      if (!a.distribuicaoLiberada || !a.arquivo?.url || !a.arquivo?.sha1) {
+        throw falha(409, `Não há download automático para ${a.nome}.`);
+      }
+      extras.push(arquivoDoPlano(a));
+    }
+    const preparado = await prepararModpackPublicado(corpo.projetoId, corpo.versaoId, {
+      base, removidos, acrescidos: extras,
+      nome: String(corpo.nome ?? '').trim().slice(0, 80) || `${base.projeto.nome} editado`,
+      memoriaMb: corpo.memoriaMb, porta: corpo.porta,
+    });
+    const revisao = createHash('sha256')
+      .update(JSON.stringify({ nome: preparado.indice.name, removidos: [...removidos].sort(), extras }))
+      .digest('hex').slice(0, 12);
+    preparado.indice.versionId = `modpackforge-${base.versao.id}-${revisao}`;
+    return {
+      origem: { url: base.versao.arquivo.url, nome: base.versao.arquivo.nome, tamanho: base.versao.arquivo.tamanho },
+      indice: preparado.indice,
+      servidor: { nome: preparado.nomeArquivo, base64: preparado.script.toString('base64') },
+      resumo: preparado.resumo,
+      adicionais: extras.length,
     };
   },
 

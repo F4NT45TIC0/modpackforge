@@ -4,6 +4,7 @@
 // então o bloqueio aparece na hora, sem ida e volta.
 
 import { checarCandidato } from '/compartilhado/conflitos.mjs';
+import { montarMrpackEditado } from '/editar-mrpack.mjs';
 
 const $ = (sel) => document.querySelector(sel);
 const esc = (s) =>
@@ -27,6 +28,7 @@ const estado = {
   buscaId: 0,
   falhouPagina: false,
   pack: new Map(), // chave -> { fonte, projetoId, nome, slug, icone, versaoId }
+  importado: null, // modpack publicado e arquivos originais, inclusive configs
   plano: null,
   resolvendo: false,
   resolucaoId: 0,
@@ -49,6 +51,7 @@ function guardarRascunho() {
         mc: estado.mc,
         nome: $('#nomePack').value,
         pack: [...estado.pack.values()],
+        importado: estado.importado,
       }),
     );
   } catch {
@@ -98,7 +101,9 @@ const formatarNumero = (n) =>
   n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n ?? 0);
 
 const formatarTamanho = (b) =>
-  b >= 1_073_741_824 ? `${(b / 1_073_741_824).toFixed(1)} GB` : `${Math.round(b / 1_048_576)} MB`;
+  b >= 1_073_741_824 ? `${(b / 1_073_741_824).toFixed(1)} GB`
+    : b >= 1_048_576 ? `${Math.round(b / 1_048_576)} MB`
+      : `${Math.max(1, Math.round(b / 1024))} KB`;
 
 /** Plural simples: "1 mod", "2 mods". */
 const contar = (n, singular, plural) => `${n} ${n === 1 ? singular : plural}`;
@@ -145,11 +150,24 @@ async function iniciar() {
 
   if (rascunho?.pack?.length) {
     for (const m of rascunho.pack) estado.pack.set(chaveDe(m.fonte, m.projetoId), m);
-    if (rascunho.nome) $('#nomePack').value = rascunho.nome;
+  }
+  if (rascunho?.nome) $('#nomePack').value = rascunho.nome;
+  if (rascunho?.importado?.projeto?.id && Array.isArray(rascunho.importado.arquivos)) {
+    estado.importado = rascunho.importado;
+    estado.importado.removidos ??= [];
+    escolherLoader(estado.importado.alvo.loader);
+    const seletor = $('#versaoJogo');
+    if (![...seletor.options].some((o) => o.value === estado.importado.alvo.mc)) {
+      seletor.add(new Option(estado.importado.alvo.mc, estado.importado.alvo.mc));
+    }
+    seletor.value = estado.importado.alvo.mc;
+    mostrarAviso(`Voltei com ${estado.importado.projeto.nome} para edição.`);
+  } else if (rascunho?.pack?.length) {
     mostrarAviso(`Voltei com o seu pack de antes: ${contar(rascunho.pack.length, 'item', 'itens')}.`);
   }
 
   await trocarVersaoJogo();
+  if (estado.importado) travarAlvoImportado();
   ligarEventos();
   // Com rascunho, resolve de novo; sem, desenha o inventário vazio.
   if (estado.pack.size) agendarResolucao();
@@ -231,6 +249,35 @@ function atualizarResumoAlvo() {
   $('#resumoAlvo').textContent = estado.mc
     ? `Minecraft ${estado.mc} com ${nomeLoader}${estado.loaderVersao ? ` ${estado.loaderVersao}` : ''}`
     : 'Escolha a versão';
+}
+
+function travarAlvoImportado() {
+  const importado = estado.importado;
+  $('#versaoJogo').disabled = Boolean(importado);
+  $('#mostrarInstaveis').disabled = Boolean(importado);
+  for (const botao of document.querySelectorAll('.loader-opcao')) botao.disabled = Boolean(importado);
+  if (importado) {
+    const versao = importado.alvo.loaderVersao;
+    const seletor = $('#versaoLoader');
+    if (![...seletor.options].some((o) => o.value === versao)) seletor.add(new Option(versao, versao));
+    seletor.value = versao;
+    seletor.disabled = true;
+    estado.loaderVersao = versao;
+  } else {
+    $('#versaoLoader').disabled = !estado.loaderVersao;
+  }
+  atualizarResumoAlvo();
+  atualizarBotaoExportar();
+}
+
+function arquivosOriginaisAtivos() {
+  if (!estado.importado) return [];
+  const removidos = new Set(estado.importado.removidos);
+  return estado.importado.arquivos.filter((a) => !removidos.has(a.caminho));
+}
+
+function originalNoPack(projetoId) {
+  return arquivosOriginaisAtivos().some((a) => a.projetoId === projetoId);
 }
 
 // ------------------------------------------------ gaveta do pack (celular)
@@ -422,8 +469,13 @@ function desenharAvisosDaBusca(avisos = []) {
 
 /** Os mods que já estão no pack, do jeito que checarCandidato espera. */
 function escolhidosParaChecagem() {
-  if (estado.plano?.arquivos?.length) return estado.plano.arquivos;
-  return [...estado.pack.values()].map((m) => ({ ...m, incompativeis: [] }));
+  const adicionais = estado.plano?.arquivos?.length
+    ? estado.plano.arquivos
+    : [...estado.pack.values()].map((m) => ({ ...m, incompativeis: [] }));
+  return [...adicionais, ...arquivosOriginaisAtivos().map((a) => ({
+    chave: chaveDe('modrinth', a.projetoId), fonte: 'modrinth', projetoId: a.projetoId,
+    nome: a.nome, slug: a.slug, tipo: a.tipo, incompativeis: [],
+  }))];
 }
 
 function desenharResultados() {
@@ -450,12 +502,13 @@ function desenharResultados() {
     .map((mod) => {
       const chave = chaveDe(mod.fonte, mod.id);
       const dentro = estado.pack.has(chave);
+      const noOriginal = mod.fonte === 'modrinth' && originalNoPack(mod.id);
       const dependencia = !dentro ? vemJunto.get(chave) : null;
-      const choques = estado.tipo !== 'mod' || dentro || dependencia ? [] : checarCandidato(mod, jaNoPack);
+      const choques = estado.tipo !== 'mod' || dentro || noOriginal || dependencia ? [] : checarCandidato(mod, jaNoPack);
       const bloqueio = choques.find((c) => c.severidade === 'bloqueio');
       const aviso = choques.find((c) => c.severidade === 'aviso');
 
-      const estadoLinha = dentro ? 'no-pack' : dependencia ? 'dependencia' : bloqueio ? 'bloqueado' : 'livre';
+      const estadoLinha = dentro || noOriginal ? 'no-pack' : dependencia ? 'dependencia' : bloqueio ? 'bloqueado' : 'livre';
       const nome = esc(mod.nome);
 
       // O texto do botão continua no HTML mesmo quando o celular mostra só o
@@ -467,6 +520,9 @@ function desenharResultados() {
       } else if (dentro) {
         acao = `<button class="botao botao-acao" data-remover="${esc(chave)}" title="Tirar ${nome} do pack">
           ${icone('menos')}<span class="botao-texto">Tirar</span></button>`;
+      } else if (noOriginal) {
+        acao = `<button class="botao botao-acao" disabled title="Já está no modpack original">
+          ${icone('junto')}<span class="botao-texto">No original</span></button>`;
       } else if (bloqueio) {
         acao = `<button class="botao botao-acao" disabled title="Bloqueado">
           ${icone('cadeado')}<span class="botao-texto">Bloqueado</span></button>`;
@@ -482,7 +538,9 @@ function desenharResultados() {
 
       // O motivo mora dentro da informação, não ao lado do botão: no celular
       // não sobra largura ali, e é aqui que os olhos já estão lendo.
-      const motivo = dependencia
+      const motivo = noOriginal
+        ? '<p class="mod-motivo" data-tipo="dependencia">Já está no modpack original. Tire a versão original para trocar por outra.</p>'
+        : dependencia
         ? `<p class="mod-motivo" data-tipo="dependencia">${icone('junto')}<span>Já vem no pack${
             dependencia.exigidoPor?.length ? `: exigido por ${esc(dependencia.exigidoPor.join(', '))}` : ''
           }</span></p>`
@@ -531,7 +589,7 @@ function desenharResultados() {
 
 function adicionar(chave) {
   const mod = estado.resultados.find((m) => chaveDe(m.fonte, m.id) === chave);
-  if (!mod || estado.pack.has(chave)) return;
+  if (!mod || estado.pack.has(chave) || (mod.fonte === 'modrinth' && originalNoPack(mod.id))) return;
   estado.pack.set(chave, {
     fonte: mod.fonte,
     projetoId: mod.id,
@@ -553,25 +611,29 @@ function remover(chave) {
 
 const modsEscolhidos = () =>
   [...estado.pack.entries()].filter(([, item]) => (item.tipo ?? 'mod') === 'mod');
+const modsOriginaisAtivos = () => arquivosOriginaisAtivos().filter((a) => a.tipo === 'mod');
 
 function abrirConfirmacaoRemoverMods() {
   const mods = modsEscolhidos();
-  if (!mods.length) return;
+  const originais = modsOriginaisAtivos();
+  if (!mods.length && !originais.length) return;
   $('#textoRemoverMods').textContent =
-    `Remover ${contar(mods.length, 'mod escolhido', 'mods escolhidos')}? Shaders e recursos continuam no pack, junto com os mods necessários para eles.`;
+    `Remover ${contar(mods.length + originais.length, 'mod', 'mods')}? Shaders, recursos e configurações continuam no pack.`;
   $('#janelaRemoverMods').showModal();
 }
 
 function confirmarRemocaoMods() {
   const mods = modsEscolhidos();
+  const originais = modsOriginaisAtivos();
   $('#janelaRemoverMods').close();
-  if (!mods.length) return;
+  if (!mods.length && !originais.length) return;
   for (const [chave] of mods) estado.pack.delete(chave);
+  if (estado.importado) estado.importado.removidos.push(...originais.map((a) => a.caminho));
   if (!estado.pack.size) estado.vistos.clear();
   estado.plano = null;
   agendarResolucao();
   desenharResultados();
-  mostrarAviso(`${contar(mods.length, 'mod escolhido removido', 'mods escolhidos removidos')} do pack.`);
+  mostrarAviso(`${contar(mods.length + originais.length, 'mod removido', 'mods removidos')} do pack.`);
 }
 
 let timerResolucao;
@@ -662,20 +724,42 @@ function desenharHotbar(itens, marcas, texto, comConflito) {
 
 const semMarcas = () => ({});
 
+function desenharOriginais() {
+  const base = estado.importado;
+  if (!base) return '';
+  const removidos = new Set(base.removidos);
+  const ativos = arquivosOriginaisAtivos();
+  const linha = (a) => `<li class="pack-item" data-origem="escolhido">
+    <span class="pack-slot">${a.icone ? `<img src="${esc(a.icone)}" alt="" loading="lazy">` : ''}</span>
+    <span><span class="pack-nome" title="${esc(a.caminho)}">${esc(a.nome)}</span><span class="pack-versao">${esc(a.caminho)}</span></span>
+    <button class="pack-remover" data-remover-original="${esc(a.caminho)}" title="Tirar do modpack" aria-label="Tirar ${esc(a.nome)} do modpack">${icone('menos')}</button>
+  </li>`;
+  return `<div class="base-importada">
+    <div class="base-cabecalho"><strong>${esc(base.projeto.nome)}</strong><button class="botao" data-sair-edicao type="button">Sair da edição</button></div>
+    <p class="ajuda">Versão ${esc(base.versao.nome)} · Minecraft ${esc(base.alvo.mc)} · ${esc(base.alvo.loader)} ${esc(base.alvo.loaderVersao)}. Os arquivos de configuração do autor serão mantidos.</p>
+    <p class="pack-secao">Arquivos originais (${ativos.length})</p>
+    <ul class="pack-lista">${ativos.map(linha).join('')}</ul>
+    ${removidos.size ? `<details class="base-detalhes"><summary>Removidos (${removidos.size}) — restaurar</summary><ul class="pack-lista">${base.arquivos.filter((a) => removidos.has(a.caminho)).map((a) => `<li class="pack-item"><span class="pack-slot"></span><span class="pack-nome">${esc(a.nome)}</span><button class="botao" data-restaurar-original="${esc(a.caminho)}">Restaurar</button></li>`).join('')}</ul></details>` : ''}
+    <details class="base-detalhes"><summary>Configurações e outros arquivos preservados (${base.configuracoes.length})</summary><ul class="base-configs">${base.configuracoes.map((p) => `<li><code>${esc(p)}</code></li>`).join('')}</ul></details>
+  </div>`;
+}
+
 function desenharPack() {
   const corpo = $('#packCorpo');
   const alertas = $('#packAlertas');
-  const quantidadeMods = modsEscolhidos().length;
+  const quantidadeMods = modsEscolhidos().length + modsOriginaisAtivos().length;
   $('#removerTodosMods').disabled = quantidadeMods === 0;
+  const originais = arquivosOriginaisAtivos().map((a) => ({ ...a, origem: 'escolhido' }));
+  const cabecalho = desenharOriginais();
 
   if (!estado.pack.size) {
-    corpo.innerHTML =
+    corpo.innerHTML = cabecalho ||
       '<p class="pack-vazio">Os itens que você escolher aparecem aqui, junto com o que eles exigem.</p>';
     alertas.innerHTML = '';
-    $('#packConta').textContent = 'Nenhum item ainda';
-    $('#packPeso').textContent = '';
-    desenharInventario([], semMarcas);
-    desenharHotbar([], semMarcas, 'Pack vazio', false);
+    $('#packConta').textContent = originais.length ? contar(originais.length, 'arquivo original', 'arquivos originais') : 'Nenhum item ainda';
+    $('#packPeso').textContent = estado.importado ? `${contar(estado.importado.configuracoes.length, 'configuração preservada', 'configurações preservadas')}` : '';
+    desenharInventario(originais, semMarcas);
+    desenharHotbar(originais, semMarcas, originais.length ? contar(originais.length, 'arquivo', 'arquivos') : 'Pack vazio', false);
     atualizarBotaoExportar();
     return;
   }
@@ -684,10 +768,10 @@ function desenharPack() {
   if (!plano) {
     // Ainda sem resposta do servidor: mostra o que o usuário escolheu.
     const escolhidosAgora = [...estado.pack.entries()].map(([chave, m]) => ({ ...m, chave, origem: 'escolhido' }));
-    corpo.innerHTML = '<p class="carregando">Resolvendo dependências…</p>';
+    corpo.innerHTML = cabecalho + '<p class="carregando">Resolvendo dependências adicionais…</p>';
     $('#packConta').innerHTML = `<span class="legenda" data-tipo="escolhido"><i></i>${contar(estado.pack.size, 'escolhido', 'escolhidos')}</span>`;
-    desenharInventario(escolhidosAgora, semMarcas);
-    desenharHotbar(escolhidosAgora, semMarcas, 'Resolvendo…', false);
+    desenharInventario([...originais, ...escolhidosAgora], semMarcas);
+    desenharHotbar([...originais, ...escolhidosAgora], semMarcas, 'Resolvendo…', false);
     atualizarBotaoExportar();
     return;
   }
@@ -707,7 +791,7 @@ function desenharPack() {
     dependencias.filter((a) => !estado.vistos.has(a.chave)).map((a) => a.chave),
   );
   const marcas = (a) => ({ novo: chegaramAgora.has(a.chave), conflito: emConflito.has(a.chave) });
-  const noInventario = [...escolhidos, ...dependencias];
+  const noInventario = [...originais, ...escolhidos, ...dependencias];
 
   const linha = (a) => {
     const novo = a.origem === 'dependencia' && !estado.vistos.has(a.chave) ? ' data-novo="sim"' : '';
@@ -730,7 +814,7 @@ function desenharPack() {
     </li>`;
   };
 
-  corpo.innerHTML =
+  corpo.innerHTML = cabecalho +
     `<p class="pack-secao">Você escolheu (${escolhidos.length})</p>
      <ul class="pack-lista">${escolhidos.map(linha).join('')}</ul>` +
     (dependencias.length
@@ -787,6 +871,7 @@ function desenharPack() {
   const legenda = [
     `<span class="legenda" data-tipo="escolhido"><i></i>${contar(escolhidos.length, 'escolhido', 'escolhidos')}</span>`,
   ];
+  if (originais.length) legenda.unshift(`<span class="legenda" data-tipo="escolhido"><i></i>${contar(originais.length, 'original', 'originais')}</span>`);
   if (dependencias.length) {
     legenda.push(
       `<span class="legenda" data-tipo="dependencia"><i></i>${dependencias.length} ${dependencias.length === 1 ? 'veio junto' : 'vieram junto'}</span>`,
@@ -803,7 +888,7 @@ function desenharPack() {
     ? contar(bloqueios, 'conflito', 'conflitos')
     : estado.resolvendo
       ? 'Resolvendo…'
-      : contar(plano.resumo.total, 'item', 'itens');
+      : contar(plano.resumo.total + originais.length, 'item', 'itens');
   desenharHotbar(noInventario, marcas, textoHotbar, bloqueios > 0);
 
   atualizarBotaoExportar();
@@ -812,7 +897,7 @@ function desenharPack() {
 function atualizarBotaoExportar() {
   const bloqueios = estado.plano?.resumo?.bloqueios ?? 0;
   const pendentes = (estado.plano?.faltando?.length ?? 0) + (estado.plano?.erros?.length ?? 0);
-  const pronto = estado.pack.size > 0 && estado.loaderVersao && !estado.resolvendo && bloqueios === 0 && pendentes === 0;
+  const pronto = (estado.pack.size > 0 || Boolean(estado.importado)) && estado.loaderVersao && !estado.resolvendo && bloqueios === 0 && pendentes === 0;
   const botao = $('#abrirExportar');
   botao.disabled = !pronto;
   botao.textContent = bloqueios > 0 || pendentes > 0 ? 'Resolva os problemas primeiro' : 'Gerar instalador';
@@ -848,6 +933,7 @@ async function abrirDetalhe(chave) {
       </div>
       <div>
         <p class="pack-secao">Versões ${mod.tipo === 'shader' ? 'de shader' : 'para ' + esc(estado.mc)} (${versoes.length})</p>
+        ${mod.tipo !== 'modpack' && mod.fonte === 'modrinth' && originalNoPack(mod.id) ? '<p class="ajuda">Este item já está no modpack original. Tire a versão original no painel do pack para escolher outra.</p>' : ''}
         ${mod.tipo === 'modpack' ? `<div class="campo-dupla">
           <div class="campo-linha"><label for="modpackRam">RAM do servidor</label><select id="modpackRam" class="campo"><option value="4096">4 GB</option><option value="6144">6 GB</option><option value="8192">8 GB</option><option value="12288">12 GB</option></select></div>
           <div class="campo-linha"><label for="modpackPorta">Porta do servidor</label><input id="modpackPorta" class="campo" type="number" min="1" max="65535" value="25565"></div>
@@ -862,8 +948,8 @@ async function abrirDetalhe(chave) {
                       <span>${esc(v.numero)}<br><span class="numero">${esc(v.arquivo?.nome ?? '')}</span></span>
                       <span class="canal canal-${esc(v.canal)}">${esc(v.canal)}</span>
                       ${mod.tipo === 'modpack'
-                        ? `<button class="botao" data-baixar-pack="${esc(v.id)}" data-projeto="${esc(mod.id)}">Baixar</button>`
-                        : `<span class="detalhe-acoes"><button class="botao" data-fixar="${esc(chave)}" data-versao="${esc(v.id)}">${fixada === v.id ? 'fixada' : 'usar esta'}</button>${
+                        ? `<span class="detalhe-acoes"><button class="botao" data-baixar-pack="${esc(v.id)}" data-projeto="${esc(mod.id)}">Baixar</button><button class="botao botao-forte" data-editar-pack="${esc(v.id)}" data-projeto="${esc(mod.id)}">Editar</button></span>`
+                        : `<span class="detalhe-acoes"><button class="botao" data-fixar="${esc(chave)}" data-versao="${esc(v.id)}" ${mod.fonte === 'modrinth' && originalNoPack(mod.id) ? 'disabled' : ''}>${fixada === v.id ? 'fixada' : 'usar esta'}</button>${
                           ['shader', 'resourcepack'].includes(mod.tipo) && v.arquivo?.nome?.toLowerCase().endsWith('.zip') && urlDownloadSeguro(v.arquivo?.url)
                             ? `<a class="botao" href="${esc(v.arquivo.url)}" target="_blank" rel="noreferrer">Baixar .zip</a>` : ''
                         }</span>`}
@@ -900,7 +986,7 @@ async function baixarModpack(projetoId, versaoId, botao) {
         <li><a class="botao" href="${urlsDeDownload[0]}" download="${esc(dados.servidor.nome)}">Baixar ${esc(dados.servidor.nome)}</a></li>
       </ul>
       <p class="ajuda">Na VPS: <code>bash ${esc(dados.servidor.nome)}</code>. O script baixa os arquivos do pack, aplica as configurações de servidor e pede o aceite do EULA.</p>
-      ${dados.pasta ? `<p class="caminho">Também salvos em ${esc(dados.pasta)}</p><button class="botao" id="abrirPastaModpack">Abrir a pasta</button>` : ''}`;
+      ${dados.pasta ? `<p class="caminho">O .sh também foi salvo em ${esc(dados.pasta)}</p><button class="botao" id="abrirPastaModpack">Abrir a pasta</button>` : ''}`;
     $('#abrirPastaModpack')?.addEventListener('click', () => api('/api/abrir-pasta', { corpo: { pasta: dados.pasta } }));
   } catch (erro) {
     mostrarAviso(`Falhou ao preparar o modpack: ${erro.message}`, 'erro');
@@ -908,6 +994,59 @@ async function baixarModpack(projetoId, versaoId, botao) {
     botao.disabled = false;
     botao.textContent = 'Baixar';
   }
+}
+
+let substituicaoPendente = null;
+async function editarModpack(projetoId, versaoId, botao, confirmado = false) {
+  if (!confirmado && (estado.importado || estado.pack.size)) {
+    substituicaoPendente = { projetoId, versaoId, botao };
+    $('#janelaSubstituirPack').showModal();
+    return;
+  }
+  botao.disabled = true;
+  botao.textContent = 'Carregando…';
+  try {
+    const dados = await api(`/api/importar-modpack?projetoId=${encodeURIComponent(projetoId)}&versaoId=${encodeURIComponent(versaoId)}`);
+    estado.importado = { ...dados, removidos: [] };
+    estado.pack.clear();
+    estado.plano = null;
+    estado.vistos.clear();
+    escolherLoader(dados.alvo.loader);
+    const seletor = $('#versaoJogo');
+    if (![...seletor.options].some((o) => o.value === dados.alvo.mc)) seletor.add(new Option(dados.alvo.mc, dados.alvo.mc));
+    seletor.value = dados.alvo.mc;
+    await trocarVersaoJogo();
+    travarAlvoImportado();
+    $('#nomePack').value = `${dados.projeto.nome} editado`.slice(0, 80);
+    $('#janelaDetalhe').close();
+    agendarResolucao();
+    desenharResultados();
+    if (matchMedia('(max-width: 56.24rem)').matches) abrirGaveta();
+    mostrarAviso(`${dados.arquivos.length} arquivos e ${dados.configuracoes.length} configurações carregados para edição.`);
+  } catch (erro) {
+    mostrarAviso(`Não consegui importar o modpack: ${erro.message}`, 'erro');
+  } finally {
+    botao.disabled = false;
+    botao.textContent = 'Editar';
+  }
+}
+
+function alterarOriginal(caminho, remover) {
+  if (!estado.importado?.arquivos.some((a) => a.caminho === caminho)) return;
+  const atual = new Set(estado.importado.removidos);
+  if (remover) atual.add(caminho);
+  else atual.delete(caminho);
+  estado.importado.removidos = [...atual];
+  agendarResolucao();
+  desenharResultados();
+}
+
+function sairDaEdicao() {
+  estado.importado = null;
+  travarAlvoImportado();
+  agendarResolucao();
+  desenharResultados();
+  mostrarAviso('Edição do modpack encerrada. Os itens adicionais continuam no seu pack.');
 }
 
 function fixarVersao(chave, versaoId) {
@@ -940,7 +1079,54 @@ function abrirExportar() {
   $('#resultadoExportar').hidden = true;
   $('#confirmarExportar').disabled = false;
   $('#confirmarExportar').textContent = 'Gerar';
+  const editando = Boolean(estado.importado);
+  $('#notaFormatos').textContent = editando
+    ? 'O .mrpack editado mantém os arquivos e configurações originais. O .sh instala a versão editada no servidor Linux.'
+    : 'Na dúvida, deixe os dois marcados: cada um serve a um tipo de launcher, e mandar o arquivo errado faz o pack simplesmente não aparecer no jogo.';
+  for (const formato of document.querySelectorAll('input[name="formato"]')) {
+    formato.disabled = editando && ['bat', 'txt'].includes(formato.value);
+    if (editando) formato.checked = ['mrpack', 'servidor'].includes(formato.value);
+    else if (formato.value === 'bat' || formato.value === 'mrpack') formato.checked = true;
+  }
+  $('#linhaPorta').hidden = !document.querySelector('input[name="formato"][value="servidor"]').checked;
   $('#janelaExportar').showModal();
+}
+
+async function exportarImportado(formatos) {
+  const base = estado.importado;
+  const dados = await api('/api/exportar-modpack-editado', {
+    corpo: {
+      projetoId: base.projeto.id,
+      versaoId: base.versao.id,
+      removidos: base.removidos,
+      itens: [...estado.pack.values()].map((m) => ({
+        fonte: m.fonte, projetoId: m.projetoId, versaoId: m.versaoId, tipo: m.tipo ?? 'mod',
+      })),
+      nome: $('#expNome').value.trim(),
+      memoriaMb: Number($('#expMemoria').value),
+      porta: Number($('#expPorta').value) || 25565,
+    },
+  });
+  const gerados = [];
+  if (formatos.includes('mrpack')) {
+    $('#confirmarExportar').textContent = `Baixando ${formatarTamanho(dados.origem.tamanho)}…`;
+    const blob = await montarMrpackEditado(dados.origem.url, dados.origem.tamanho, dados.indice);
+    const nome = `${($('#expNome').value.trim() || 'modpack-editado').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 70) || 'modpack-editado'}.mrpack`;
+    gerados.push({ nome, url: URL.createObjectURL(blob), tamanho: blob.size });
+  }
+  if (formatos.includes('servidor')) {
+    gerados.push({ nome: dados.servidor.nome, url: urlDoArquivo(dados.servidor.base64), tamanho: atob(dados.servidor.base64).length });
+  }
+  for (const url of urlsDeDownload) URL.revokeObjectURL(url);
+  urlsDeDownload = gerados.map((g) => g.url);
+  $('#nomePack').value = $('#expNome').value.trim();
+  guardarRascunho();
+  const caixa = $('#resultadoExportar');
+  caixa.hidden = false;
+  caixa.innerHTML = `<strong>Pronto. Modpack editado com ${dados.indice.files.length} arquivos de download.</strong>
+    <p>Os ${base.configuracoes.length} arquivos de configuração e outros overrides originais foram preservados no .mrpack. ${dados.resumo.arquivos} arquivos entram no servidor; ${dados.resumo.excluidos} exclusivos do cliente ficam de fora.</p>
+    <ul class="downloads">${gerados.map((g) => `<li><a class="botao" href="${g.url}" download="${esc(g.nome)}">Baixar ${esc(g.nome)}</a><span class="tamanho">${formatarTamanho(g.tamanho)}</span></li>`).join('')}</ul>
+    ${formatos.includes('servidor') ? '<p>Na VPS, rode o arquivo com <code>bash nome-do-arquivo.sh</code>. O script busca os arquivos originais para aplicar as configurações de servidor.</p>' : ''}`;
 }
 
 async function confirmarExportar() {
@@ -955,6 +1141,12 @@ async function confirmarExportar() {
   botao.textContent = 'Gerando…';
 
   try {
+    if (estado.importado) {
+      await exportarImportado(formatos);
+      botao.textContent = 'Gerar de novo';
+      botao.disabled = false;
+      return;
+    }
     const dados = await api('/api/exportar', {
       corpo: {
         loader: estado.loader,
@@ -1110,7 +1302,7 @@ function ligarEventos() {
 
   $('#loaders').addEventListener('click', async (e) => {
     const botao = e.target.closest('.loader-opcao');
-    if (!botao) return;
+    if (!botao || estado.importado) return;
     escolherLoader(botao.dataset.loader);
     await carregarVersoesLoader();
     agendarResolucao();
@@ -1118,17 +1310,20 @@ function ligarEventos() {
   });
 
   $('#versaoJogo').addEventListener('change', async () => {
+    if (estado.importado) return;
     await trocarVersaoJogo();
     agendarResolucao();
   });
 
   $('#mostrarInstaveis').addEventListener('change', async (e) => {
+    if (estado.importado) return;
     estado.mostrarInstaveis = e.target.checked;
     desenharVersoesJogo();
     await trocarVersaoJogo();
   });
 
   $('#versaoLoader').addEventListener('change', (e) => {
+    if (estado.importado) return;
     estado.loaderVersao = e.target.value;
     atualizarBotaoExportar();
     atualizarResumoAlvo();
@@ -1199,6 +1394,17 @@ function ligarEventos() {
     const baixarBtn = e.target.closest('[data-baixar-pack]');
     if (baixarBtn) return baixarModpack(baixarBtn.dataset.projeto, baixarBtn.dataset.baixarPack, baixarBtn);
 
+    const editarBtn = e.target.closest('[data-editar-pack]');
+    if (editarBtn) return editarModpack(editarBtn.dataset.projeto, editarBtn.dataset.editarPack, editarBtn);
+
+    const removerOriginal = e.target.closest('[data-remover-original]');
+    if (removerOriginal) return alterarOriginal(removerOriginal.dataset.removerOriginal, true);
+
+    const restaurarOriginal = e.target.closest('[data-restaurar-original]');
+    if (restaurarOriginal) return alterarOriginal(restaurarOriginal.dataset.restaurarOriginal, false);
+
+    if (e.target.closest('[data-sair-edicao]')) return sairDaEdicao();
+
     if (e.target.closest('[data-abrir-config]')) return abrirConfig();
   });
 
@@ -1213,6 +1419,16 @@ function ligarEventos() {
   $('#removerTodosMods').addEventListener('click', abrirConfirmacaoRemoverMods);
   $('#cancelarRemocaoMods').addEventListener('click', () => $('#janelaRemoverMods').close());
   $('#confirmarRemocaoMods').addEventListener('click', confirmarRemocaoMods);
+  $('#cancelarSubstituicao').addEventListener('click', () => {
+    substituicaoPendente = null;
+    $('#janelaSubstituirPack').close();
+  });
+  $('#confirmarSubstituicao').addEventListener('click', () => {
+    const pedido = substituicaoPendente;
+    substituicaoPendente = null;
+    $('#janelaSubstituirPack').close();
+    if (pedido) editarModpack(pedido.projetoId, pedido.versaoId, pedido.botao, true);
+  });
   $('#confirmarExportar').addEventListener('click', confirmarExportar);
   $('#fecharExportar').addEventListener('click', () => $('#janelaExportar').close());
 

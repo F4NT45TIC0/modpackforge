@@ -1,13 +1,11 @@
-import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import * as modrinth from './modrinth.mjs';
 import { planoDeInstalacaoServidor } from './loaders.mjs';
 import { gerarSlug } from './exportar.mjs';
-import { lerEntradasZip, lerArquivoZip } from './ler-zip.mjs';
-import { USER_AGENT } from './http.mjs';
+import { lerDiretorioZipRemoto, lerArquivoZipRemoto } from './ler-zip-remoto.mjs';
+import { checarCandidato } from '../web/compartilhado/conflitos.mjs';
 
 const MOLDE = new URL('./instalador-modpack.sh', import.meta.url);
-const LIMITE_MRPACK = 64 * 1024 * 1024;
 const DEPENDENCIAS = [
   ['fabric-loader', 'fabric'], ['quilt-loader', 'quilt'],
   ['forge', 'forge'], ['neoforge', 'neoforge'],
@@ -15,9 +13,10 @@ const DEPENDENCIAS = [
 
 const aspas = (valor) => `'${String(valor).replace(/'/g, "'\\''")}'`;
 
-function caminhoSeguro(valor) {
+function caminhoSeguro(valor, { paraUnzip = false } = {}) {
   const p = String(valor ?? '');
-  return p.length > 0 && p.length <= 240 && !/[\\|*?\[\]\x00-\x1f]/.test(p) &&
+  const invalidos = paraUnzip ? /[\\|*?\[\]\x00-\x1f]/ : /[\\|\x00-\x1f]/;
+  return p.length > 0 && p.length <= 240 && !invalidos.test(p) &&
     !p.startsWith('/') && p.split('/').every((parte) => parte && parte !== '.' && parte !== '..');
 }
 
@@ -28,27 +27,8 @@ function urlSegura(valor) {
   } catch { return false; }
 }
 
-async function baixarMrpack(url, sha1) {
-  const alvo = new URL(url);
-  if (alvo.protocol !== 'https:' || alvo.hostname !== 'cdn.modrinth.com') throw new Error('Endereço de download do modpack inesperado.');
-  const resposta = await fetch(url, { headers: { 'User-Agent': USER_AGENT }, signal: AbortSignal.timeout(60000) });
-  if (!resposta.ok || !resposta.body) throw new Error(`Não consegui baixar o .mrpack (HTTP ${resposta.status}).`);
-  const partes = [];
-  let total = 0;
-  for await (const parte of resposta.body) {
-    total += parte.length;
-    if (total > LIMITE_MRPACK) throw new Error('Este .mrpack é grande demais para converter (limite de 64 MB).');
-    partes.push(parte);
-  }
-  const dados = Buffer.concat(partes);
-  if (sha1 && createHash('sha1').update(dados).digest('hex') !== sha1.toLowerCase()) {
-    throw new Error('O .mrpack baixado não confere com o hash publicado.');
-  }
-  return dados;
-}
-
-/** Gera um .sh usando a versão publicada e o índice oficial do .mrpack. */
-export async function prepararModpackPublicado(projetoId, versaoId, { memoriaMb = 4096, porta = 25565 } = {}) {
+/** Lê só o índice e o diretório ZIP, mesmo quando o .mrpack tem centenas de MB. */
+export async function lerModpackPublicado(projetoId, versaoId) {
   const [projeto, versao] = await Promise.all([
     modrinth.projeto(projetoId), modrinth.versaoPorId(versaoId),
   ]);
@@ -56,9 +36,10 @@ export async function prepararModpackPublicado(projetoId, versaoId, { memoriaMb 
   if (!versao.arquivo?.nome?.toLowerCase().endsWith('.mrpack')) throw new Error('Esta versão não tem arquivo .mrpack.');
   if (!/^[^\\/\x00-\x1f]{1,180}$/.test(versao.arquivo.nome)) throw new Error('Nome do .mrpack inválido.');
   if (!/^[a-f0-9]{40}$/i.test(versao.arquivo.sha1 ?? '')) throw new Error('O .mrpack não tem SHA-1 publicado.');
-  const mrpack = await baixarMrpack(versao.arquivo.url, versao.arquivo.sha1);
-  const entradas = lerEntradasZip(mrpack);
-  const indice = JSON.parse(lerArquivoZip(mrpack, entradas.get('modrinth.index.json')).toString('utf8'));
+  const alvo = new URL(versao.arquivo.url);
+  if (alvo.protocol !== 'https:' || alvo.hostname !== 'cdn.modrinth.com') throw new Error('Endereço de download do modpack inesperado.');
+  const entradas = await lerDiretorioZipRemoto(versao.arquivo.url);
+  const indice = JSON.parse((await lerArquivoZipRemoto(versao.arquivo.url, entradas.get('modrinth.index.json'))).toString('utf8'));
   if (indice.formatVersion !== 1 || indice.game !== 'minecraft' || !Array.isArray(indice.files)) {
     throw new Error('Índice do .mrpack inválido ou não suportado.');
   }
@@ -70,14 +51,11 @@ export async function prepararModpackPublicado(projetoId, versaoId, { memoriaMb 
   const loaderVersao = String(indice.dependencies[chaveLoader]);
   if (!/^[\w.\-+]{1,64}$/.test(loaderVersao)) throw new Error('Versão do modloader inválida.');
   if (indice.files.length > 1500) throw new Error('O .mrpack tem arquivos demais.');
-
   const arquivos = [];
-  const excluidos = [];
   const usados = new Set();
   for (const item of indice.files) {
     if (!caminhoSeguro(item.path) || usados.has(item.path)) throw new Error('O .mrpack contém caminho inválido ou duplicado.');
     usados.add(item.path);
-    if (['eula.txt', 'run.sh', 'iniciar.sh', 'server.jar'].includes(item.path)) continue;
     const url = item.downloads?.find(urlSegura);
     const sha1 = String(item.hashes?.sha1 ?? '').toLowerCase();
     if (!url || !/^[a-f0-9]{40}$/.test(sha1)) throw new Error(`Download ou SHA-1 inválido: ${item.path}`);
@@ -85,6 +63,35 @@ export async function prepararModpackPublicado(projetoId, versaoId, { memoriaMb 
       ? new URL(url).pathname.match(/^\/data\/([\w-]{8})\/versions\/([\w-]{8})\//) : null;
     arquivos.push({ caminho: item.path, sha1, url, env: item.env, projetoId: partes?.[1] ?? null, versaoId: partes?.[2] ?? null });
   }
+  return { projeto, versao, indice, entradas, arquivos, mc, loader, loaderVersao };
+}
+
+/** Gera um .sh com os arquivos do servidor, preservando os overrides originais. */
+export async function prepararModpackPublicado(projetoId, versaoId, {
+  memoriaMb = 4096, porta = 25565, removidos = [], acrescidos = [], nome: nomeEditado = null,
+  base: baseLida = null,
+} = {}) {
+  const base = baseLida ?? await lerModpackPublicado(projetoId, versaoId);
+  const { projeto, versao, indice, entradas, mc, loader, loaderVersao } = base;
+  const remover = new Set(removidos);
+  if ([...remover].some((caminho) => !base.arquivos.some((a) => a.caminho === caminho))) {
+    throw new Error('A remoção contém um arquivo que não existe no modpack.');
+  }
+  const arquivos = base.arquivos.filter((a) => !remover.has(a.caminho));
+  const usados = new Set(arquivos.map((a) => a.caminho));
+  const indiceEditado = { ...indice, files: indice.files.filter((a) => !remover.has(a.path)) };
+  for (const extra of acrescidos) {
+    if (!caminhoSeguro(extra.path) || usados.has(extra.path) || !urlSegura(extra.downloads?.[0]) ||
+        !/^[a-f0-9]{40}$/i.test(extra.hashes?.sha1 ?? '')) throw new Error(`Arquivo adicional inválido: ${extra.path}`);
+    usados.add(extra.path);
+    const { projetoId: projetoExtra, versaoId: versaoExtra, ...arquivoNoIndice } = extra;
+    indiceEditado.files.push(arquivoNoIndice);
+    arquivos.push({
+      caminho: extra.path, sha1: extra.hashes.sha1.toLowerCase(), url: extra.downloads[0],
+      env: extra.env, projetoId: projetoExtra ?? null, versaoId: versaoExtra ?? null,
+    });
+  }
+  const excluidos = [];
 
   // Alguns autores marcam todos os arquivos como necessários no servidor, até
   // Sodium e Iris. Conferimos os projetos e versões de cada mod hospedado na
@@ -95,10 +102,32 @@ export async function prepararModpackPublicado(projetoId, versaoId, { memoriaMb 
   ]);
   const projetosPorId = new Map(projetos.map((p) => [p.id, p]));
   const versoesPorId = new Map(versoes.map((v) => [v.id, v]));
+  if (acrescidos.length) {
+    const originais = base.arquivos.filter((a) => !remover.has(a.caminho) && a.caminho.startsWith('mods/') && a.projetoId);
+    for (const extra of acrescidos.filter((a) => a.path.startsWith('mods/') && a.projetoId)) {
+      const projetoExtra = projetosPorId.get(extra.projetoId);
+      const versaoExtra = versoesPorId.get(extra.versaoId);
+      if (!projetoExtra) continue;
+      const candidato = { ...projetoExtra, id: extra.projetoId };
+      for (const original of originais) {
+        const projetoOriginal = projetosPorId.get(original.projetoId);
+        const versaoOriginal = versoesPorId.get(original.versaoId);
+        if (!projetoOriginal) continue;
+        const incompatibilidade = versaoExtra?.dependencies?.some((d) => d.dependency_type === 'incompatible' && d.project_id === original.projetoId) ||
+          versaoOriginal?.dependencies?.some((d) => d.dependency_type === 'incompatible' && d.project_id === extra.projetoId);
+        const conhecido = checarCandidato(candidato, [{ ...projetoOriginal, projetoId: original.projetoId }])
+          .some((c) => c.severidade === 'bloqueio');
+        if (incompatibilidade || conhecido) {
+          throw Object.assign(new Error(`${projetoExtra.nome} conflita com ${projetoOriginal.nome} do modpack original.`), { status: 409 });
+        }
+      }
+    }
+  }
   const candidatos = new Set(arquivos.filter((a) => {
     const projeto = projetosPorId.get(a.projetoId);
     const versao = versoesPorId.get(a.versaoId);
-    return !['shaderpacks/', 'resourcepacks/'].some((prefixo) => a.caminho.startsWith(prefixo)) &&
+    return !['eula.txt', 'run.sh', 'iniciar.sh', 'server.jar'].includes(a.caminho) &&
+      !['shaderpacks/', 'resourcepacks/'].some((prefixo) => a.caminho.startsWith(prefixo)) &&
       a.env?.server !== 'unsupported' && projeto?.ladoServidor !== 'unsupported' &&
       !['client_only', 'singleplayer_only'].includes(versao?.environment);
   }));
@@ -113,6 +142,7 @@ export async function prepararModpackPublicado(projetoId, versaoId, { memoriaMb 
     }
     for (const a of arquivos) {
       if (!candidatos.has(a) && exigidos.has(a.projetoId) && a.env?.server !== 'unsupported' &&
+          !['eula.txt', 'run.sh', 'iniciar.sh', 'server.jar'].includes(a.caminho) &&
           !['shaderpacks/', 'resourcepacks/'].some((prefixo) => a.caminho.startsWith(prefixo))) {
         candidatos.add(a);
         mudou = true;
@@ -128,12 +158,12 @@ export async function prepararModpackPublicado(projetoId, versaoId, { memoriaMb 
     for (const [origem, entrada] of entradas) {
       if (!origem.startsWith(prefixo) || origem.endsWith('/')) continue;
       const destino = origem.slice(prefixo.length);
-      if (!caminhoSeguro(destino) || ![0, 8].includes(entrada.metodo)) throw new Error('O .mrpack contém override inválido.');
+      if (!caminhoSeguro(destino, { paraUnzip: true }) || ![0, 8].includes(entrada.metodo)) throw new Error('O .mrpack contém override inválido.');
       if (['eula.txt', 'run.sh', 'iniciar.sh', 'server.jar'].includes(destino)) continue;
       if (['resourcepacks/', 'shaderpacks/', 'config/yosbr/'].some((p) => destino.startsWith(p)) ||
           ['options.txt', 'config/iris.properties', 'config/oculus.properties'].includes(destino)) continue;
       tamanhoOverrides += entrada.descomprimido;
-      if (entrada.descomprimido > 128 * 1024 * 1024 || tamanhoOverrides > 512 * 1024 * 1024) {
+      if (entrada.descomprimido > 1024 * 1024 * 1024 || tamanhoOverrides > 2 * 1024 * 1024 * 1024) {
         throw new Error('Os overrides deste .mrpack são grandes demais para o instalador.');
       }
       overrides.push({ origem, destino });
@@ -141,7 +171,8 @@ export async function prepararModpackPublicado(projetoId, versaoId, { memoriaMb 
   }
 
   const instalador = await planoDeInstalacaoServidor(loader, mc, loaderVersao);
-  const nome = String(indice.name || projeto.nome).replace(/[\x00-\x1f]+/g, ' ').slice(0, 80);
+  const nome = String(nomeEditado || indice.name || projeto.nome).replace(/[\x00-\x1f]+/g, ' ').slice(0, 80);
+  indiceEditado.name = nome;
   const valores = {
     PACK_NOME: aspas(nome), PACK_SLUG: aspas(gerarSlug(nome)),
     MC_VERSAO: aspas(mc), LOADER_NOME: aspas(loader), LOADER_VERSAO: aspas(loaderVersao),
@@ -158,7 +189,7 @@ export async function prepararModpackPublicado(projetoId, versaoId, { memoriaMb 
   let script = await readFile(MOLDE, 'utf8');
   for (const [chave, valor] of Object.entries(valores)) script = script.split(`@@${chave}@@`).join(valor);
   return {
-    projeto, versao, mrpack,
+    projeto, versao, indice: indiceEditado,
     nomeArquivo: `instalar-servidor-${gerarSlug(nome)}.sh`,
     script: Buffer.from(script.replace(/\r\n/g, '\n'), 'utf8'),
     resumo: { nome, mc, loader, loaderVersao, arquivos: arquivosServidor.length, excluidos: excluidos.length, overrides: overrides.length },

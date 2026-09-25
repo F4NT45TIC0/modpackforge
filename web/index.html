@@ -161,6 +161,15 @@
   </div>
 </dialog>
 
+<dialog class="janela" id="janelaSubstituirPack" aria-labelledby="tituloSubstituirPack">
+  <h2 class="janela-titulo" id="tituloSubstituirPack">Abrir outro modpack</h2>
+  <div class="janela-corpo"><p>O pack que está no painel será substituído. Gere ou baixe os arquivos atuais antes, se quiser guardá-los.</p></div>
+  <div class="janela-rodape">
+    <button class="botao" id="cancelarSubstituicao" type="button">Cancelar</button>
+    <button class="botao botao-forte" id="confirmarSubstituicao" type="button">Abrir outro pack</button>
+  </div>
+</dialog>
+
 <!-- detalhe do mod -------------------------------------------------------- -->
 <dialog class="janela" id="janelaDetalhe">
   <div class="janela-corpo" id="detalheCorpo"></div>
@@ -200,7 +209,7 @@
 
     <fieldset class="formatos">
       <legend>O que gerar</legend>
-      <p class="ajuda">
+      <p class="ajuda" id="notaFormatos">
         Na dúvida, deixe os dois marcados: cada um serve a um tipo de launcher, e
         mandar o arquivo errado faz o pack simplesmente não aparecer no jogo.
       </p>
