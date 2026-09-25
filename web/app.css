@@ -311,10 +311,13 @@ select.campo option { background: var(--pedra); color: var(--texto); }
 
 .navegador {
   display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
   min-height: 0;
   padding: 1.25rem 1.5rem 0;
 }
+
+.tipos-catalogo { display: flex; flex-wrap: wrap; gap: 0.4rem; padding-bottom: 0.8rem; }
+.tipos-catalogo .categoria { font-size: var(--t-sm); padding: 0.4rem 0.75rem; }
 
 .busca { display: flex; gap: 0.6rem; }
 
@@ -951,6 +954,7 @@ select.campo option { background: var(--pedra); color: var(--texto); }
 }
 
 .detalhe-versao > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.detalhe-acoes { display: flex; gap: 0.4rem; }
 .detalhe-versao .numero { font-family: var(--mono); font-size: var(--t-2xs); color: var(--texto-fraco); }
 .canal { font-size: var(--t-xs); font-weight: 700; }
 .canal-release { color: var(--esmeralda); }
@@ -1207,7 +1211,8 @@ select.campo option { background: var(--pedra); color: var(--texto); }
   .campo-dupla { grid-template-columns: 1fr; }
 
   .detalhe-versao { grid-template-columns: minmax(0, 1fr) auto; }
-  .detalhe-versao .botao { grid-column: 1 / -1; }
+  .detalhe-versao > .botao, .detalhe-acoes { grid-column: 1 / -1; }
+  .detalhe-acoes > * { flex: 1; text-align: center; }
 
   .aviso-flutuante { bottom: calc(var(--altura-hotbar) + env(safe-area-inset-bottom) + 0.75rem); }
 }

@@ -149,8 +149,114 @@ async function obterVersao(fonte, projetoId, versaoId, alvo) {
   return melhorVersao(lista, alvo);
 }
 
+// ------------------------------------------------------------------ shaders
+
 /**
- * @param {{loader:string, mc:string, itens:Array<{fonte:string,projetoId:string,versaoId?:string}>}} entrada
+ * Quem carrega shaders, em ordem de preferência. O Iris cobre Fabric, Quilt e
+ * NeoForge; o Oculus é o porte dele para Forge. Cada um lê a própria config,
+ * que é onde a exportação deixa o shader já ativado.
+ */
+const CARREGADORES_DE_SHADER = [
+  { id: 'iris', slug: 'iris', nome: 'Iris', config: 'iris.properties' },
+  { id: 'oculus', slug: 'oculus', nome: 'Oculus', config: 'oculus.properties' },
+];
+
+async function carregadorDeShader(alvo) {
+  for (const c of CARREGADORES_DE_SHADER) {
+    const versoes = await modrinth.versoes(c.slug, alvo).catch(() => []);
+    const versao = melhorVersao(versoes, alvo);
+    if (versao) return { ...c, projetoId: String(versao.projetoId) };
+  }
+  return null;
+}
+
+/** Resolve os shaders escolhidos. Sem dependências: é um arquivo por shader. */
+async function resolverShaders(pedidos, alvo) {
+  const porPosicao = new Array(pedidos.length).fill(null);
+  const faltando = [];
+  const erros = [];
+
+  await Promise.all(
+    pedidos.map(async (pedido, i) => {
+      try {
+        if (pedido.fonte !== 'modrinth') throw new Error('Shaders vêm só da Modrinth por enquanto.');
+        const versao = pedido.versaoId
+          ? await modrinth.versaoPorId(pedido.versaoId)
+          : modrinth.melhorVersaoShader(await modrinth.versoesShader(pedido.projetoId), alvo.mc);
+        if (versao && versao.projetoId !== pedido.projetoId) throw new Error('Versão de shader não pertence ao projeto.');
+        if (!versao?.arquivo?.url) {
+          faltando.push({
+            fonte: pedido.fonte,
+            projetoId: pedido.projetoId,
+            exigidoPor: [],
+            motivo: 'Nenhuma versão deste shader roda no Iris.',
+          });
+          return;
+        }
+        const projetoId = String(versao.projetoId);
+        porPosicao[i] = {
+          chave: chaveDe('modrinth', projetoId),
+          fonte: 'modrinth',
+          projetoId,
+          versaoId: versao.id,
+          versaoNumero: versao.numero,
+          canal: versao.canal,
+          arquivo: versao.arquivo,
+          distribuicaoLiberada: true,
+          paginaDoArquivo: null,
+          origem: 'escolhido',
+          exigidoPor: [],
+          fixado: Boolean(pedido.versaoId),
+          incompativeis: [],
+          opcionais: [],
+        };
+      } catch (erro) {
+        erros.push({
+          fonte: pedido.fonte,
+          projetoId: pedido.projetoId,
+          mensagem: erro.message,
+          codigo: erro.codigo ?? null,
+        });
+      }
+    }),
+  );
+
+  // Mantém a ordem em que o usuário escolheu: o primeiro é o que vem ativado.
+  return { shaders: porPosicao.filter(Boolean), faltando, erros };
+}
+
+async function resolverRecursos(pedidos, alvo) {
+  const porPosicao = new Array(pedidos.length).fill(null);
+  const faltando = [];
+  const erros = [];
+  await Promise.all(pedidos.map(async (pedido, i) => {
+    try {
+      if (pedido.fonte !== 'modrinth') throw new Error('Pacotes de recursos vêm da Modrinth.');
+      const versao = pedido.versaoId
+        ? await modrinth.versaoPorId(pedido.versaoId)
+        : modrinth.melhorVersao(await modrinth.versoesRecurso(pedido.projetoId, alvo.mc));
+      if (versao && versao.projetoId !== pedido.projetoId) throw new Error('Versão de recursos não pertence ao projeto.');
+      if (!versao?.arquivo?.url || !versao.arquivo.nome.endsWith('.zip')) {
+        faltando.push({ fonte: pedido.fonte, projetoId: pedido.projetoId, exigidoPor: [], motivo: 'Nenhum .zip para esta versão do Minecraft.' });
+        return;
+      }
+      const projetoId = String(versao.projetoId);
+      porPosicao[i] = {
+        chave: chaveDe('modrinth', projetoId), fonte: 'modrinth', projetoId,
+        versaoId: versao.id, versaoNumero: versao.numero, canal: versao.canal,
+        arquivo: versao.arquivo, distribuicaoLiberada: true, paginaDoArquivo: null,
+        origem: 'escolhido', exigidoPor: [], fixado: Boolean(pedido.versaoId),
+        incompativeis: [], opcionais: [],
+      };
+    } catch (erro) {
+      erros.push({ fonte: pedido.fonte, projetoId: pedido.projetoId, mensagem: erro.message, codigo: erro.codigo ?? null });
+    }
+  }));
+  return { recursos: porPosicao.filter(Boolean), faltando, erros };
+}
+
+/**
+ * @param {{loader:string, mc:string, itens:Array<{fonte:string,projetoId:string,versaoId?:string,tipo?:string}>}} entrada
  */
 export async function resolver({ loader, mc, itens }) {
   const alvo = { loader, mc };
@@ -159,7 +265,21 @@ export async function resolver({ loader, mc, itens }) {
   const faltando = [];
   const erros = [];
 
-  let fila = itens.map((i) => ({
+  // Shaders seguem outro caminho: não têm dependências nem fabric.mod.json.
+  const pedidosDeShader = itens.filter((i) => i.tipo === 'shader');
+  const pedidosDeRecurso = itens.filter((i) => i.tipo === 'resourcepack');
+  const pedidosDeMod = itens.filter((i) => !['shader', 'resourcepack'].includes(i.tipo));
+
+  const resolucaoShaders = await resolverShaders(pedidosDeShader, alvo);
+  const shaders = resolucaoShaders.shaders;
+  faltando.push(...resolucaoShaders.faltando);
+  erros.push(...resolucaoShaders.erros);
+  const resolucaoRecursos = await resolverRecursos(pedidosDeRecurso, alvo);
+  const recursos = resolucaoRecursos.recursos;
+  faltando.push(...resolucaoRecursos.faltando);
+  erros.push(...resolucaoRecursos.erros);
+
+  let fila = pedidosDeMod.map((i) => ({
     fonte: i.fonte,
     projetoId: String(i.projetoId),
     versaoId: i.versaoId ?? null,
@@ -167,6 +287,24 @@ export async function resolver({ loader, mc, itens }) {
     exigidoPor: [],
     profundidade: 0,
   }));
+
+  // Shader sem carregador não liga. O carregador entra na fila como qualquer
+  // dependência, e daí em diante passa pelo mesmo ajuste de compatibilidade
+  // que os mods (o Iris exige uma faixa do Sodium, por exemplo).
+  let carregador = null;
+  if (shaders.length) {
+    carregador = await carregadorDeShader(alvo);
+    if (carregador) {
+      fila.push({
+        fonte: 'modrinth',
+        projetoId: carregador.projetoId,
+        versaoId: null,
+        origem: 'dependencia',
+        exigidoPor: shaders.map((s) => s.chave),
+        profundidade: 1,
+      });
+    }
+  }
 
   while (fila.length) {
     const rodada = agruparPedidos(fila);
@@ -272,6 +410,8 @@ export async function resolver({ loader, mc, itens }) {
   const porFonte = { modrinth: [], curseforge: [] };
   for (const r of resolvidos.values()) porFonte[r.fonte]?.push(r.projetoId);
   for (const f of faltando) porFonte[f.fonte]?.push(f.projetoId);
+  for (const s of shaders) porFonte.modrinth.push(s.projetoId);
+  for (const r of recursos) porFonte.modrinth.push(r.projetoId);
 
   const metadados = new Map();
   await Promise.all(
@@ -363,24 +503,59 @@ export async function resolver({ loader, mc, itens }) {
     });
   }
 
+  // Shaders escolhidos sem nenhum carregador possível: é um bloqueio, com os
+  // nomes. Deixar passar entregaria um shader que nunca liga.
+  if (shaders.length && !carregador) {
+    const nomeLoader = { fabric: 'Fabric', quilt: 'Quilt', forge: 'Forge', neoforge: 'NeoForge' }[loader] ?? loader;
+    conflitos.push({
+      severidade: 'bloqueio',
+      grupo: 'sem-carregador-de-shader',
+      titulo: 'Nenhum carregador de shader',
+      motivo:
+        `Shaders precisam do Iris ou do Oculus, e nenhum dos dois existe para ${nomeLoader} ${mc}. ` +
+        'Tire os shaders ou troque a versão.',
+      envolvidos: shaders.map(enriquecer).map((s) => ({ chave: s.chave, nome: s.nome })),
+    });
+  }
+
   const manuais = finais.filter((a) => !a.distribuicaoLiberada);
-  const automaticos = finais.filter((a) => a.distribuicaoLiberada);
 
   // `meta` é um objeto grande e só interessa aqui dentro; não vai para a rede.
   // Levamos só o que a exportação precisa: o modid, a versão que o jar declara
   // e de quem ele depende — este último para nenhum filtro derrubar um mod do
   // qual outro depende.
-  const limpos = finais.map(({ meta, ...resto }) => ({
+  const mods = finais.map(({ meta, ...resto }) => ({
     ...resto,
+    tipo: 'mod',
     modId: meta?.modId ?? null,
     versaoDeclarada: meta?.versao ?? null,
     fornece: meta?.fornece ?? [],
     dependeDe: Object.keys(meta?.depende ?? {}),
   }));
 
+  const shadersProntos = shaders.map(enriquecer).map((s) => ({
+    ...s,
+    tipo: 'shader',
+    modId: null,
+    versaoDeclarada: null,
+    fornece: [],
+    dependeDe: [],
+  }));
+
+  const recursosProntos = recursos.map(enriquecer).map((r) => ({
+    ...r, tipo: 'resourcepack', modId: null, versaoDeclarada: null,
+    fornece: [], dependeDe: [],
+  }));
+
+  const arquivosFinais = [...mods, ...shadersProntos, ...recursosProntos];
+  const automaticos = arquivosFinais.filter((a) => a.distribuicaoLiberada);
+
   return {
     alvo,
-    arquivos: limpos,
+    arquivos: arquivosFinais,
+    // Quem carrega os shaders, e o arquivo de config onde o shader ativo é
+    // gravado. A exportação usa para deixar o shader ligado na primeira vez.
+    carregadorShader: shaders.length && carregador ? { id: carregador.id, nome: carregador.nome, config: carregador.config } : null,
     conflitos,
     faltando: faltando.map(enriquecer),
     erros,
@@ -388,9 +563,12 @@ export async function resolver({ loader, mc, itens }) {
     trocas: ajuste.trocas,
     adicionadosPorMetadados: ajuste.adicionados,
     resumo: {
-      total: limpos.length,
-      escolhidos: limpos.filter((a) => a.origem === 'escolhido').length,
-      dependencias: limpos.filter((a) => a.origem === 'dependencia').length,
+      total: arquivosFinais.length,
+      mods: mods.length,
+      shaders: shadersProntos.length,
+      recursos: recursosProntos.length,
+      escolhidos: arquivosFinais.filter((a) => a.origem === 'escolhido').length,
+      dependencias: arquivosFinais.filter((a) => a.origem === 'dependencia').length,
       bloqueios: conflitos.filter((c) => c.severidade === 'bloqueio').length,
       avisos: conflitos.filter((c) => c.severidade === 'aviso').length,
       manuais: manuais.length,

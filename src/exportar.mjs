@@ -57,9 +57,12 @@ async function montarManifesto(plano, opcoes) {
       versionId: instalador.versionId,
     },
     memoriaMb,
+    carregadorShader: plano.carregadorShader,
+    shaderAtivo: plano.arquivos.find((a) => a.tipo === 'shader')?.arquivo?.nome ?? null,
     tamanhoTotal: automaticos.reduce((s, a) => s + (a.arquivo?.tamanho ?? 0), 0),
     mods: automaticos.map((a) => ({
       nome: a.nome,
+      pasta: a.tipo === 'shader' ? 'shaderpacks' : a.tipo === 'resourcepack' ? 'resourcepacks' : 'mods',
       arquivo: a.arquivo.nome,
       url: a.arquivo.url,
       sha1: a.arquivo.sha1,
@@ -148,7 +151,7 @@ export async function gerarMrpack(plano, opcoes) {
         if (a.arquivo.sha1) hashes.sha1 = a.arquivo.sha1;
         if (a.arquivo.sha512) hashes.sha512 = a.arquivo.sha512;
         return {
-          path: `mods/${a.arquivo.nome}`,
+          path: `${a.tipo === 'shader' ? 'shaderpacks' : a.tipo === 'resourcepack' ? 'resourcepacks' : 'mods'}/${a.arquivo.nome}`,
           hashes,
           env: {
             // Sempre "required" no cliente, de propósito.
@@ -164,7 +167,7 @@ export async function gerarMrpack(plano, opcoes) {
             //
             // Tudo que está neste pack entrou porque o cliente precisa.
             client: 'required',
-            server: a.ladoServidor === 'unsupported' ? 'unsupported' : 'required',
+            server: ['shader', 'resourcepack'].includes(a.tipo) || a.ladoServidor === 'unsupported' ? 'unsupported' : 'required',
           },
           downloads: [a.arquivo.url],
           fileSize: a.arquivo.tamanho ?? 0,
@@ -192,6 +195,14 @@ export async function gerarMrpack(plano, opcoes) {
     });
   }
 
+  const shaderAtivo = plano.arquivos.find((a) => a.tipo === 'shader');
+  if (shaderAtivo && plano.carregadorShader?.config) {
+    entradas.push({
+      caminho: `overrides/config/${plano.carregadorShader.config}`,
+      dados: `shaderPack=${shaderAtivo.arquivo.nome}\n`,
+    });
+  }
+
   return {
     nomeArquivo: `${nomeDeArquivoSeguro(nome)}.mrpack`,
     conteudo: montarZip(entradas),
@@ -206,7 +217,7 @@ export function gerarListaTexto(plano, opcoes) {
   const linhas = [
     opcoes.nome,
     `Minecraft ${mc} - ${nomeLoader} ${opcoes.loaderVersao}`,
-    `${plano.arquivos.length} mods`,
+    `${plano.arquivos.length} arquivos (mods, shaders e recursos)`,
     '',
   ];
   const escolhidos = plano.arquivos.filter((a) => a.origem === 'escolhido');

@@ -23,6 +23,7 @@ import { gerarBat, gerarMrpack, gerarListaTexto, gerarSlug } from './exportar.mj
 import { gerarInstaladorServidor, gerarAjudaWindows } from './exportar-servidor.mjs';
 import { lerConfig, gravarConfig, caminhoDaConfig } from './store.mjs';
 import { limparCache } from './http.mjs';
+import { prepararModpackPublicado } from './modpack-publicado.mjs';
 
 const RAIZ = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const PASTA_PACKS = path.join(RAIZ, 'packs');
@@ -67,10 +68,14 @@ function validarItens(itens, nuvem) {
   return itens.map((i) => {
     if (!['modrinth', 'curseforge'].includes(i?.fonte)) throw falha(400, 'Fonte inválida');
     if (!/^[\w-]{1,32}$/.test(String(i.projetoId ?? ''))) throw falha(400, 'Id de projeto inválido');
+    const tipo = i.tipo ?? 'mod';
+    if (!['mod', 'shader', 'resourcepack'].includes(tipo)) throw falha(400, 'Tipo de arquivo inválido');
+    if (tipo !== 'mod' && i.fonte !== 'modrinth') throw falha(400, 'Tipo disponível somente na Modrinth');
     return {
       fonte: i.fonte,
       projetoId: String(i.projetoId),
       versaoId: i.versaoId ? String(i.versaoId).slice(0, 40) : null,
+      tipo,
     };
   });
 }
@@ -91,6 +96,12 @@ const rotas = {
       loaders: LOADERS,
       versoesDoJogo: versoes,
       categorias: modrinth.CATEGORIAS,
+      categoriasPorTipo: {
+        mod: modrinth.CATEGORIAS,
+        shader: modrinth.CATEGORIAS_SHADER,
+        modpack: modrinth.CATEGORIAS_MODPACK,
+        resourcepack: modrinth.CATEGORIAS_RECURSO,
+      },
       curseforgeAtiva: chaveCf,
       carimbo,
       preferencias: {
@@ -109,6 +120,7 @@ const rotas = {
 
   'GET buscar': async ({ params }) => {
     const { loader, mc } = validarAlvo(params);
+    const tipo = ['mod', 'shader', 'modpack', 'resourcepack'].includes(params.tipo) ? params.tipo : 'mod';
     const consulta = String(params.q ?? '').slice(0, 120);
     const ordem = ['relevance', 'downloads', 'follows', 'newest', 'updated'].includes(params.ordem)
       ? params.ordem
@@ -118,12 +130,12 @@ const rotas = {
     const limite = 20;
     const deslocamento = pagina * limite;
 
-    const querCurseforge = params.fontes !== 'modrinth' && (await curseforge.temChave());
-    const pedido = { consulta, loader, mc, categorias, ordem, deslocamento, limite };
+    const querCurseforge = tipo === 'mod' && params.fontes !== 'modrinth' && (await curseforge.temChave());
+    const pedido = { consulta, loader, mc, categorias, ordem, deslocamento, limite, tipo };
     const semResultado = { total: 0, itens: [] };
 
     const [rm, rc] = await Promise.allSettled([
-      params.fontes === 'curseforge' ? Promise.resolve(semResultado) : modrinth.buscar(pedido),
+      tipo === 'mod' && params.fontes === 'curseforge' ? Promise.resolve(semResultado) : modrinth.buscar(pedido),
       querCurseforge ? curseforge.buscar(pedido) : Promise.resolve(semResultado),
     ]);
 
@@ -138,7 +150,7 @@ const rotas = {
 
     // A busca pulou a CurseForge por causa de uma chave recusada antes: avisa,
     // senão os mods de lá somem da lista sem explicação nenhuma.
-    if (!querCurseforge && curseforge.chaveFoiReprovada()) {
+    if (tipo === 'mod' && !querCurseforge && curseforge.chaveFoiReprovada()) {
       avisos.push({
         texto: 'A CurseForge está fora da busca: a chave de API foi recusada.',
         codigo: 'CF_CHAVE_INVALIDA',
@@ -162,13 +174,41 @@ const rotas = {
 
   'GET projeto': async ({ params, nuvem }) => {
     const { loader, mc } = validarAlvo(params);
-    const [item] = validarItens([{ fonte: params.fonte, projetoId: params.id }], nuvem);
+    const tipo = ['mod', 'shader', 'modpack', 'resourcepack'].includes(params.tipo) ? params.tipo : 'mod';
+    if (tipo === 'modpack' && params.fonte !== 'modrinth') throw falha(400, 'Modpacks publicados vêm da Modrinth');
+    const [item] = validarItens([{ fonte: params.fonte, projetoId: params.id, tipo: tipo === 'modpack' ? 'mod' : tipo }], nuvem);
     const provider = item.fonte === 'modrinth' ? modrinth : curseforge;
     const [projeto, versoes] = await Promise.all([
       provider.projeto(item.projetoId),
-      provider.versoes(item.projetoId, { loader, mc }),
+      tipo === 'shader' ? modrinth.versoesShader(item.projetoId)
+        : tipo === 'resourcepack' ? modrinth.versoesRecurso(item.projetoId, mc)
+          : tipo === 'modpack' ? modrinth.versoes(item.projetoId, { loader, mc })
+            : provider.versoes(item.projetoId, { loader, mc }),
     ]);
+    if (projeto.tipo !== tipo && !(tipo === 'mod' && !projeto.tipo)) throw falha(400, 'Tipo de projeto não confere');
     return { projeto, versoes };
+  },
+
+  'POST baixar-modpack': async ({ corpo, nuvem }) => {
+    const projetoId = String(corpo.projetoId ?? '');
+    const versaoId = String(corpo.versaoId ?? '');
+    if (!/^[\w-]{1,32}$/.test(projetoId) || !/^[\w-]{1,40}$/.test(versaoId)) throw falha(400, 'Modpack ou versão inválida');
+    const preparado = await prepararModpackPublicado(projetoId, versaoId, {
+      memoriaMb: corpo.memoriaMb, porta: corpo.porta,
+    });
+    let pasta = null;
+    if (!nuvem) {
+      pasta = path.join(PASTA_PACKS, gerarSlug(preparado.resumo.nome));
+      await mkdir(pasta, { recursive: true });
+      await writeFile(path.join(pasta, preparado.versao.arquivo.nome), preparado.mrpack);
+      await writeFile(path.join(pasta, preparado.nomeArquivo), preparado.script);
+    }
+    return {
+      pasta,
+      mrpack: { nome: preparado.versao.arquivo.nome, url: preparado.versao.arquivo.url },
+      servidor: { nome: preparado.nomeArquivo, base64: preparado.script.toString('base64') },
+      resumo: preparado.resumo,
+    };
   },
 
   'POST resolver': async ({ corpo, nuvem }) => {
@@ -199,6 +239,9 @@ const rotas = {
     };
 
     const plano = await resolver({ loader, mc, itens });
+    if (plano.resumo.bloqueios || plano.faltando.length || plano.erros.length) {
+      throw falha(409, 'Este pack ainda tem conflitos ou arquivos sem versão. Resolva antes de gerar.');
+    }
 
     const arquivos = [];
     if (formatos.includes('bat')) {

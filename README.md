@@ -13,11 +13,13 @@ Dois cliques em **`ModpackForge.bat`**. Ele abre o navegador na interface.
 
 1. Escolha o **modloader** (Fabric, NeoForge, Forge ou Quilt) e a **versão do Minecraft**.
    A versão do loader já vem preenchida com a recomendada.
-2. Procure mods. A busca vai na Modrinth e, se você configurar a chave, também na CurseForge.
-3. Clique em **Adicionar**. A partir daí a interface trabalha sozinha:
+2. Escolha **Mods**, **Shaders**, **Recursos** ou **Modpacks prontos** no catálogo. Mods são buscados na Modrinth e, se você configurar a chave, também na CurseForge. Os outros tipos vêm da Modrinth.
+3. Para montar seu pack, clique em **Adicionar**. A partir daí a interface trabalha sozinha:
    - as **dependências entram junto** e aparecem marcadas com "exigido por";
    - os mods **incompatíveis ficam bloqueados**, com o motivo escrito ao lado.
-4. Clique em **Gerar instalador**.
+4. Clique em **Gerar instalador**. Shaders entram em `shaderpacks/`, pacotes de recursos em `resourcepacks/`, e o instalador adiciona um carregador de shaders compatível quando necessário. No detalhe de cada shader ou pacote de recursos também há um link para baixar só o `.zip`.
+
+Para baixar um **modpack pronto**, abra a aba correspondente, escolha uma versão e clique em **Baixar**. O ModpackForge entrega o `.mrpack` para importar no launcher e um `.sh` para instalar o lado servidor numa VPS Linux.
 
 O resultado sai em `packs/<nome-do-pack>/`.
 
@@ -29,6 +31,12 @@ O resultado sai em `packs/<nome-do-pack>/`.
 | `instalar-servidor-<nome>.sh` | Sua VPS Linux. Monta o servidor com os mesmos mods. |
 | `<nome>.mrpack` | Quem usa Prism, ATLauncher ou o app da Modrinth. |
 | `<nome> - lista.txt` | Só para conferir ou colar no grupo. |
+
+Ao baixar um modpack publicado, o `.mrpack` original e o `.sh` gerado também ficam em `packs/<nome-do-modpack>/` no modo local.
+
+### Serverpack de um modpack publicado
+
+O `.sh` lê a versão e o modloader declarados no `.mrpack`, baixa os arquivos do servidor, confere SHA-1 e aplica `overrides/` e `server-overrides/` na ordem do formato. Ele exclui arquivos marcados como exclusivos do cliente e confere o lado servidor dos mods hospedados na Modrinth, pois alguns packs marcam todos os mods como necessários no servidor. Precisa de Java, `unzip`, `sha1sum` e `curl` ou `wget` na VPS. No primeiro uso, pergunta onde instalar e pede o aceite do EULA.
 
 ### O que o `.bat` faz na máquina do seu amigo
 

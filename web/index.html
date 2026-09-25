@@ -71,8 +71,14 @@
 </header>
 
 <main class="principal">
-  <!-- navegador de mods ------------------------------------------------- -->
-  <section class="navegador" aria-label="Catálogo de mods">
+  <!-- catálogo ---------------------------------------------------------- -->
+  <section class="navegador" aria-label="Catálogo de conteúdo">
+    <div class="tipos-catalogo" id="tiposCatalogo" role="group" aria-label="Tipo de conteúdo">
+      <button type="button" class="categoria" data-tipo="mod" aria-pressed="true">Mods</button>
+      <button type="button" class="categoria" data-tipo="shader" aria-pressed="false">Shaders</button>
+      <button type="button" class="categoria" data-tipo="resourcepack" aria-pressed="false">Recursos</button>
+      <button type="button" class="categoria" data-tipo="modpack" aria-pressed="false">Modpacks prontos</button>
+    </div>
     <div class="busca">
       <div class="busca-campo">
         <svg class="icone" viewBox="0 0 16 16" aria-hidden="true"><path d="M7 2.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9zM10.5 10.5l3.5 3.5"/></svg>
@@ -118,13 +124,13 @@
       <!-- O pack desenhado como inventário: 9 colunas, a largura do inventário
            do jogo. A lista abaixo carrega a informação; a grade é o retrato. -->
       <div class="inventario" id="packGrade" aria-hidden="true"></div>
-      <p class="pack-legenda" id="packConta">Nenhum mod ainda</p>
+      <p class="pack-legenda" id="packConta">Nenhum item ainda</p>
     </header>
 
     <div class="pack-alertas" id="packAlertas"></div>
 
     <div class="pack-corpo" id="packCorpo">
-      <p class="pack-vazio">Os mods que você escolher aparecem aqui, junto com tudo que eles exigem.</p>
+      <p class="pack-vazio">Os itens que você escolher aparecem aqui, junto com o que eles exigem.</p>
     </div>
 
     <footer class="pack-rodape">

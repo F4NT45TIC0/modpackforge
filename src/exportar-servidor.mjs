@@ -17,7 +17,7 @@ const aspasShell = (valor) =>
 
 /** Um mod que o servidor não pode carregar, segundo o rótulo da loja. */
 export function ehSomenteCliente(mod) {
-  return mod.ladoServidor === 'unsupported';
+  return mod.tipo === 'shader' || mod.tipo === 'resourcepack' || mod.ladoServidor === 'unsupported';
 }
 
 /**

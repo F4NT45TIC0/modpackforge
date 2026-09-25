@@ -18,15 +18,18 @@ const estado = {
   consulta: '',
   ordem: 'relevance',
   fontes: 'ambas',
+  tipo: 'mod',
   categorias: new Set(),
   pagina: 0,
   resultados: [],
   temMais: false,
   buscando: false,
+  buscaId: 0,
   falhouPagina: false,
   pack: new Map(), // chave -> { fonte, projetoId, nome, slug, icone, versaoId }
   plano: null,
   resolvendo: false,
+  resolucaoId: 0,
   vistos: new Set(), // para animar só as dependências que acabaram de chegar
 };
 
@@ -110,6 +113,9 @@ const ICONES = {
   baixado: '<path d="M8 2.5v8M4.5 7l3.5 3.5L11.5 7M3 13.5h10"/>',
 };
 const icone = (nome) => `<svg class="icone" viewBox="0 0 16 16" aria-hidden="true">${ICONES[nome]}</svg>`;
+const urlDownloadSeguro = (valor) => {
+  try { return new URL(valor).protocol === 'https:'; } catch { return false; }
+};
 
 // ------------------------------------------------------------- inicialização
 
@@ -140,7 +146,7 @@ async function iniciar() {
   if (rascunho?.pack?.length) {
     for (const m of rascunho.pack) estado.pack.set(chaveDe(m.fonte, m.projetoId), m);
     if (rascunho.nome) $('#nomePack').value = rascunho.nome;
-    mostrarAviso(`Voltei com o seu pack de antes: ${contar(rascunho.pack.length, 'mod', 'mods')}.`);
+    mostrarAviso(`Voltei com o seu pack de antes: ${contar(rascunho.pack.length, 'item', 'itens')}.`);
   }
 
   await trocarVersaoJogo();
@@ -173,7 +179,7 @@ function desenharVersoesJogo() {
 }
 
 function desenharCategorias() {
-  $('#categorias').innerHTML = estado.inicio.categorias
+  $('#categorias').innerHTML = (estado.inicio.categoriasPorTipo?.[estado.tipo] ?? estado.inicio.categorias)
     .map((c) => `<button type="button" class="categoria" data-cat="${esc(c.id)}" aria-pressed="false">${esc(c.nome)}</button>`)
     .join('');
 }
@@ -306,7 +312,7 @@ function atualizarSentinela() {
     sentinela.dataset.estado = 'espera';
   } else {
     sentinela.textContent = estado.resultados.length
-      ? `Fim da lista: ${contar(estado.resultados.length, 'mod', 'mods')}`
+      ? `Fim da lista: ${estado.resultados.length} resultados`
       : '';
     sentinela.dataset.estado = 'fim';
   }
@@ -314,8 +320,10 @@ function atualizarSentinela() {
 
 async function buscar() {
   if (!estado.loader || !estado.mc) return;
+  const buscaId = ++estado.buscaId;
   const seletores = ['#consulta', '#ordem', '#fontes'];
   for (const s of seletores) $(s).disabled = false;
+  $('#fontes').disabled = estado.tipo !== 'mod';
 
   estado.buscando = true;
   estado.falhouPagina = false;
@@ -336,12 +344,14 @@ async function buscar() {
     mc: estado.mc,
     ordem: estado.ordem,
     pagina: String(estado.pagina),
+    tipo: estado.tipo,
   });
   if (estado.fontes !== 'ambas') params.set('fontes', estado.fontes);
   if (estado.categorias.size) params.set('categorias', [...estado.categorias].join(','));
 
   try {
     const dados = await api(`/api/buscar?${params}`);
+    if (buscaId !== estado.buscaId) return;
 
     if (estado.pagina === 0) {
       estado.resultados = dados.itens;
@@ -362,6 +372,7 @@ async function buscar() {
     // Se a página nova ainda não encheu a área visível, segue buscando.
     checarRolagem();
   } catch (erro) {
+    if (buscaId !== estado.buscaId) return;
     estado.falhouPagina = true;
     if (estado.pagina === 0) {
       // Sem redesenhar depois: a lista está vazia, e o redesenho trocaria o erro
@@ -376,8 +387,10 @@ async function buscar() {
       desenharResultados();
     }
   } finally {
-    estado.buscando = false;
-    atualizarSentinela();
+    if (buscaId === estado.buscaId) {
+      estado.buscando = false;
+      atualizarSentinela();
+    }
   }
 }
 
@@ -418,7 +431,7 @@ function desenharResultados() {
   lista.removeAttribute('aria-busy');
   if (!estado.resultados.length) {
     lista.innerHTML = `<li class="carregando">${
-      estado.consulta ? 'Nada com esse nome para ' + esc(estado.loader) + ' ' + esc(estado.mc) + '.' : 'Nenhum mod para essa combinação.'
+      estado.consulta ? 'Nada com esse nome para ' + esc(estado.mc) + '.' : 'Nenhum resultado para essa combinação.'
     }</li>`;
     $('#carregarMais').hidden = true;
     $('.rodape-lista').hidden = true;
@@ -438,7 +451,7 @@ function desenharResultados() {
       const chave = chaveDe(mod.fonte, mod.id);
       const dentro = estado.pack.has(chave);
       const dependencia = !dentro ? vemJunto.get(chave) : null;
-      const choques = dentro || dependencia ? [] : checarCandidato(mod, jaNoPack);
+      const choques = estado.tipo !== 'mod' || dentro || dependencia ? [] : checarCandidato(mod, jaNoPack);
       const bloqueio = choques.find((c) => c.severidade === 'bloqueio');
       const aviso = choques.find((c) => c.severidade === 'aviso');
 
@@ -448,7 +461,10 @@ function desenharResultados() {
       // O texto do botão continua no HTML mesmo quando o celular mostra só o
       // ícone: é ele que o leitor de tela anuncia.
       let acao;
-      if (dentro) {
+      if (mod.tipo === 'modpack') {
+        acao = `<button class="botao botao-forte botao-acao" data-detalhe="${esc(chave)}" title="Ver versões de ${nome}">
+          ${icone('baixado')}<span class="botao-texto">Baixar</span></button>`;
+      } else if (dentro) {
         acao = `<button class="botao botao-acao" data-remover="${esc(chave)}" title="Tirar ${nome} do pack">
           ${icone('menos')}<span class="botao-texto">Tirar</span></button>`;
       } else if (bloqueio) {
@@ -522,6 +538,7 @@ function adicionar(chave) {
     nome: mod.nome,
     slug: mod.slug,
     icone: mod.icone,
+    tipo: mod.tipo ?? 'mod',
     versaoId: null,
   });
   agendarResolucao();
@@ -537,6 +554,7 @@ function remover(chave) {
 let timerResolucao;
 function agendarResolucao() {
   guardarRascunho();
+  estado.resolucaoId++;
   clearTimeout(timerResolucao);
   if (!estado.pack.size) {
     estado.plano = null;
@@ -549,24 +567,31 @@ function agendarResolucao() {
 }
 
 async function resolverPack() {
+  const resolucaoId = estado.resolucaoId;
   const itens = [...estado.pack.values()].map((m) => ({
     fonte: m.fonte,
     projetoId: m.projetoId,
     versaoId: m.versaoId,
+    tipo: m.tipo ?? 'mod',
   }));
   try {
-    estado.plano = await api('/api/resolver', {
+    const plano = await api('/api/resolver', {
       corpo: { loader: estado.loader, mc: estado.mc, itens },
     });
+    if (resolucaoId !== estado.resolucaoId) return;
+    estado.plano = plano;
     for (const erro of estado.plano.erros ?? []) {
       if (erro.codigo === 'CF_SEM_CHAVE') mostrarAviso('Configure a chave da CurseForge para resolver esses mods.', 'erro');
     }
   } catch (erro) {
+    if (resolucaoId !== estado.resolucaoId) return;
     mostrarAviso(`Não consegui montar o pack: ${erro.message}`, 'erro');
   } finally {
-    estado.resolvendo = false;
-    desenharPack();
-    desenharResultados();
+    if (resolucaoId === estado.resolucaoId) {
+      estado.resolvendo = false;
+      desenharPack();
+      desenharResultados();
+    }
   }
 }
 
@@ -619,9 +644,9 @@ function desenharPack() {
 
   if (!estado.pack.size) {
     corpo.innerHTML =
-      '<p class="pack-vazio">Os mods que você escolher aparecem aqui, junto com tudo que eles exigem.</p>';
+      '<p class="pack-vazio">Os itens que você escolher aparecem aqui, junto com o que eles exigem.</p>';
     alertas.innerHTML = '';
-    $('#packConta').textContent = 'Nenhum mod ainda';
+    $('#packConta').textContent = 'Nenhum item ainda';
     $('#packPeso').textContent = '';
     desenharInventario([], semMarcas);
     desenharHotbar([], semMarcas, 'Pack vazio', false);
@@ -720,6 +745,9 @@ function desenharPack() {
       <strong>${esc(f.nome)}</strong> é exigido${f.exigidoPor?.length ? ' por ' + esc(f.exigidoPor.join(', ')) : ''}, mas não tem versão para ${esc(estado.loader)} ${esc(estado.mc)}.
     </div>`);
   }
+  for (const erro of plano.erros) {
+    blocos.push(`<div class="alerta alerta-bloqueio"><strong>Não consegui resolver um arquivo</strong> — ${esc(erro.mensagem)}</div>`);
+  }
   if (plano.manuais.length) {
     blocos.push(`<div class="alerta alerta-aviso">
       <strong>${plano.manuais.length} ${plano.manuais.length === 1 ? 'mod precisa' : 'mods precisam'} de download manual</strong> —
@@ -749,7 +777,7 @@ function desenharPack() {
     ? contar(bloqueios, 'conflito', 'conflitos')
     : estado.resolvendo
       ? 'Resolvendo…'
-      : contar(plano.resumo.total, 'mod', 'mods');
+      : contar(plano.resumo.total, 'item', 'itens');
   desenharHotbar(noInventario, marcas, textoHotbar, bloqueios > 0);
 
   atualizarBotaoExportar();
@@ -757,10 +785,11 @@ function desenharPack() {
 
 function atualizarBotaoExportar() {
   const bloqueios = estado.plano?.resumo?.bloqueios ?? 0;
-  const pronto = estado.pack.size > 0 && estado.loaderVersao && !estado.resolvendo && bloqueios === 0;
+  const pendentes = (estado.plano?.faltando?.length ?? 0) + (estado.plano?.erros?.length ?? 0);
+  const pronto = estado.pack.size > 0 && estado.loaderVersao && !estado.resolvendo && bloqueios === 0 && pendentes === 0;
   const botao = $('#abrirExportar');
   botao.disabled = !pronto;
-  botao.textContent = bloqueios > 0 ? 'Resolva os conflitos primeiro' : 'Gerar instalador';
+  botao.textContent = bloqueios > 0 || pendentes > 0 ? 'Resolva os problemas primeiro' : 'Gerar instalador';
 }
 
 // ------------------------------------------------------------- detalhe
@@ -774,7 +803,7 @@ async function abrirDetalhe(chave) {
 
   try {
     const { projeto, versoes } = await api(
-      `/api/projeto?fonte=${encodeURIComponent(mod.fonte)}&id=${encodeURIComponent(mod.id)}&loader=${encodeURIComponent(estado.loader)}&mc=${encodeURIComponent(estado.mc)}`,
+      `/api/projeto?fonte=${encodeURIComponent(mod.fonte)}&id=${encodeURIComponent(mod.id)}&tipo=${encodeURIComponent(mod.tipo ?? 'mod')}&loader=${encodeURIComponent(estado.loader)}&mc=${encodeURIComponent(estado.mc)}`,
     );
     const fixada = estado.pack.get(chave)?.versaoId ?? null;
 
@@ -792,7 +821,11 @@ async function abrirDetalhe(chave) {
         </div>
       </div>
       <div>
-        <p class="pack-secao">Versões para ${esc(estado.loader)} ${esc(estado.mc)} (${versoes.length})</p>
+        <p class="pack-secao">Versões ${mod.tipo === 'shader' ? 'de shader' : 'para ' + esc(estado.mc)} (${versoes.length})</p>
+        ${mod.tipo === 'modpack' ? `<div class="campo-dupla">
+          <div class="campo-linha"><label for="modpackRam">RAM do servidor</label><select id="modpackRam" class="campo"><option value="4096">4 GB</option><option value="6144">6 GB</option><option value="8192">8 GB</option><option value="12288">12 GB</option></select></div>
+          <div class="campo-linha"><label for="modpackPorta">Porta do servidor</label><input id="modpackPorta" class="campo" type="number" min="1" max="65535" value="25565"></div>
+        </div><p class="ajuda">Ao escolher uma versão, você recebe o .mrpack para o launcher e um .sh para instalar o servidor Linux.</p>` : ''}
         <div class="detalhe-versoes">
           ${
             versoes.length
@@ -802,19 +835,52 @@ async function abrirDetalhe(chave) {
                     (v) => `<div class="detalhe-versao">
                       <span>${esc(v.numero)}<br><span class="numero">${esc(v.arquivo?.nome ?? '')}</span></span>
                       <span class="canal canal-${esc(v.canal)}">${esc(v.canal)}</span>
-                      <button class="botao" data-fixar="${esc(chave)}" data-versao="${esc(v.id)}">${
-                        fixada === v.id ? 'fixada' : 'usar esta'
-                      }</button>
+                      ${mod.tipo === 'modpack'
+                        ? `<button class="botao" data-baixar-pack="${esc(v.id)}" data-projeto="${esc(mod.id)}">Baixar</button>`
+                        : `<span class="detalhe-acoes"><button class="botao" data-fixar="${esc(chave)}" data-versao="${esc(v.id)}">${fixada === v.id ? 'fixada' : 'usar esta'}</button>${
+                          ['shader', 'resourcepack'].includes(mod.tipo) && v.arquivo?.nome?.toLowerCase().endsWith('.zip') && urlDownloadSeguro(v.arquivo?.url)
+                            ? `<a class="botao" href="${esc(v.arquivo.url)}" target="_blank" rel="noreferrer">Baixar .zip</a>` : ''
+                        }</span>`}
                     </div>`,
                   )
                   .join('')
               : '<p class="nota">Nenhuma versão compatível.</p>'
           }
         </div>
-        ${fixada ? `<button class="botao" data-fixar="${esc(chave)}" data-versao="">Voltar para a mais nova</button>` : ''}
+        ${fixada && mod.tipo !== 'modpack' ? `<button class="botao" data-fixar="${esc(chave)}" data-versao="">Voltar para a mais nova</button>` : ''}
+        <div id="resultadoModpack"></div>
       </div>`;
   } catch (erro) {
     $('#detalheCorpo').innerHTML = `<p class="carregando">${esc(erro.message)}</p>`;
+  }
+}
+
+async function baixarModpack(projetoId, versaoId, botao) {
+  botao.disabled = true;
+  botao.textContent = 'Preparando…';
+  try {
+    const dados = await api('/api/baixar-modpack', {
+      corpo: {
+        projetoId, versaoId,
+        memoriaMb: Number($('#modpackRam').value),
+        porta: Number($('#modpackPorta').value),
+      },
+    });
+    for (const url of urlsDeDownload) URL.revokeObjectURL(url);
+    urlsDeDownload = [urlDoArquivo(dados.servidor.base64)];
+    $('#resultadoModpack').innerHTML = `<p class="ajuda"><strong>${esc(dados.resumo.nome)}</strong> — ${esc(dados.resumo.mc)}, ${esc(dados.resumo.loader)} ${esc(dados.resumo.loaderVersao)}. ${dados.resumo.arquivos} arquivos no servidor; ${dados.resumo.excluidos} exclusivos do cliente ficaram de fora.</p>
+      <ul class="downloads">
+        <li><a class="botao" href="${esc(dados.mrpack.url)}" target="_blank" rel="noreferrer">Baixar ${esc(dados.mrpack.nome)}</a></li>
+        <li><a class="botao" href="${urlsDeDownload[0]}" download="${esc(dados.servidor.nome)}">Baixar ${esc(dados.servidor.nome)}</a></li>
+      </ul>
+      <p class="ajuda">Na VPS: <code>bash ${esc(dados.servidor.nome)}</code>. O script baixa os arquivos do pack, aplica as configurações de servidor e pede o aceite do EULA.</p>
+      ${dados.pasta ? `<p class="caminho">Também salvos em ${esc(dados.pasta)}</p><button class="botao" id="abrirPastaModpack">Abrir a pasta</button>` : ''}`;
+    $('#abrirPastaModpack')?.addEventListener('click', () => api('/api/abrir-pasta', { corpo: { pasta: dados.pasta } }));
+  } catch (erro) {
+    mostrarAviso(`Falhou ao preparar o modpack: ${erro.message}`, 'erro');
+  } finally {
+    botao.disabled = false;
+    botao.textContent = 'Baixar';
   }
 }
 
@@ -877,6 +943,7 @@ async function confirmarExportar() {
           fonte: m.fonte,
           projetoId: m.projetoId,
           versaoId: m.versaoId,
+          tipo: m.tipo ?? 'mod',
         })),
       },
     });
@@ -911,7 +978,7 @@ async function confirmarExportar() {
     urlsDeDownload = dados.gerados.map((g) => urlDoArquivo(g.base64));
 
     caixa.innerHTML = `
-      <strong>Pronto. ${dados.resumo.total} ${dados.resumo.total === 1 ? 'mod' : 'mods'} no pack.</strong>
+      <strong>Pronto. ${dados.resumo.total} ${dados.resumo.total === 1 ? 'item' : 'itens'} no pack.</strong>
       ${dados.resumo.trocas ? `<p>${dados.resumo.trocas} ${dados.resumo.trocas === 1 ? 'versão foi ajustada' : 'versões foram ajustadas'} para os mods abrirem juntos.</p>` : ''}
       <ul class="downloads">${dados.gerados
         .map(
@@ -1000,6 +1067,21 @@ async function salvarChave(chave) {
 // --------------------------------------------------------------- eventos
 
 function ligarEventos() {
+  $('#tiposCatalogo').addEventListener('click', (e) => {
+    const botao = e.target.closest('[data-tipo]');
+    if (!botao || botao.dataset.tipo === estado.tipo) return;
+    estado.tipo = botao.dataset.tipo;
+    estado.categorias.clear();
+    for (const b of $('#tiposCatalogo').querySelectorAll('[data-tipo]')) {
+      b.setAttribute('aria-pressed', String(b === botao));
+    }
+    const nomes = { mod: 'mods', shader: 'shaders', resourcepack: 'pacotes de recursos', modpack: 'modpacks' };
+    $('#consulta').placeholder = `Buscar ${nomes[estado.tipo]}`;
+    $('#consulta').setAttribute('aria-label', `Buscar ${nomes[estado.tipo]}`);
+    desenharCategorias();
+    reiniciarBusca();
+  });
+
   $('#loaders').addEventListener('click', async (e) => {
     const botao = e.target.closest('.loader-opcao');
     if (!botao) return;
@@ -1087,6 +1169,9 @@ function ligarEventos() {
 
     const fixarBtn = e.target.closest('[data-fixar]');
     if (fixarBtn) return fixarVersao(fixarBtn.dataset.fixar, fixarBtn.dataset.versao);
+
+    const baixarBtn = e.target.closest('[data-baixar-pack]');
+    if (baixarBtn) return baixarModpack(baixarBtn.dataset.projeto, baixarBtn.dataset.baixarPack, baixarBtn);
 
     if (e.target.closest('[data-abrir-config]')) return abrirConfig();
   });

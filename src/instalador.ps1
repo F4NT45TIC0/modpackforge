@@ -32,7 +32,7 @@ Clear-Host
 Write-Host ''
 Write-Host "  $($pack.nome)" -ForegroundColor Cyan
 Write-Host "  Minecraft $($pack.minecraft) - $($pack.loaderNome) $($pack.loaderVersao)" -ForegroundColor DarkCyan
-Write-Host "  $($totalMods) mods - $(Formatar-Tamanho $pack.tamanhoTotal)" -ForegroundColor DarkGray
+Write-Host "  $($totalMods) arquivos - $(Formatar-Tamanho $pack.tamanhoTotal)" -ForegroundColor DarkGray
 if ($pack.autor) { Write-Host "  Montado por $($pack.autor)" -ForegroundColor DarkGray }
 Write-Host ''
 
@@ -175,7 +175,7 @@ if (Test-Path (Join-Path $pastaVersao "$($pack.loaderInstalador.versionId).json"
 
 # ---------------------------------------------------------------------- mods
 
-Titulo "Mods ($($totalMods))"
+Titulo "Arquivos ($($totalMods))"
 
 $registro = Join-Path $instancia '.modpackforge.json'
 $anteriores = @()
@@ -183,7 +183,10 @@ if (Test-Path $registro) {
   try { $anteriores = (Get-Content $registro -Raw | ConvertFrom-Json).arquivos } catch { $anteriores = @() }
 }
 
-$esperados = @($pack.mods | ForEach-Object { $_.arquivo })
+$esperados = @($pack.mods | ForEach-Object {
+  $pastaTipo = if ($_.pasta -in @('shaderpacks', 'resourcepacks')) { $_.pasta } else { 'mods' }
+  "$pastaTipo/$($_.arquivo)"
+})
 $baixados = 0
 $reaproveitados = 0
 $falhas = @()
@@ -197,7 +200,14 @@ for ($inicio = 0; $inicio -lt $totalMods; $inicio += $porVez) {
   $pendentes = @()
 
   foreach ($mod in $fatia) {
-    $destino = Join-Path $pastaMods $mod.arquivo
+    $pastaTipo = switch ($mod.pasta) {
+      'shaderpacks' { 'shaderpacks' }
+      'resourcepacks' { 'resourcepacks' }
+      default { 'mods' }
+    }
+    $pastaDestino = Join-Path $instancia $pastaTipo
+    [IO.Directory]::CreateDirectory($pastaDestino) | Out-Null
+    $destino = Join-Path $pastaDestino $mod.arquivo
     $indice++
 
     if (Test-Path $destino) {
@@ -240,8 +250,14 @@ for ($inicio = 0; $inicio -lt $totalMods; $inicio += $porVez) {
 # Tira da pasta o que este instalador colocou antes e o pack nao usa mais.
 $removidos = 0
 foreach ($antigo in $anteriores) {
-  if ($esperados -notcontains $antigo) {
-    $caminho = Join-Path $pastaMods $antigo
+  if ($antigo -match '^(mods|shaderpacks|resourcepacks)/[^/\\]+$') {
+    $relativo = $antigo
+  } elseif ($antigo -match '^[^/\\]+$') {
+    $relativo = "mods/$antigo"
+  } else { continue }
+  if ($relativo -match '(^|/)\.\.?(?:/|$)') { continue }
+  if ($esperados -notcontains $relativo) {
+    $caminho = Join-Path $instancia $relativo
     if (Test-Path $caminho) { Remove-Item $caminho -Force -ErrorAction SilentlyContinue; $removidos++ }
   }
 }
@@ -253,6 +269,13 @@ foreach ($antigo in $anteriores) {
   aplicado = (Get-Date).ToString('o')
   arquivos = $esperados
 } | ConvertTo-Json -Depth 5 | Set-Content -Path $registro -Encoding UTF8
+
+if ($pack.shaderAtivo -and $pack.carregadorShader.config) {
+  $pastaConfig = Join-Path $instancia 'config'
+  New-Item -ItemType Directory -Path $pastaConfig -Force | Out-Null
+  $configShader = Join-Path $pastaConfig $pack.carregadorShader.config
+  [IO.File]::WriteAllText($configShader, "shaderPack=$($pack.shaderAtivo)`n", [Text.UTF8Encoding]::new($false))
+}
 
 # -------------------------------------------------------- perfil no launcher
 
