@@ -135,6 +135,7 @@
 
     <footer class="pack-rodape">
       <p class="pack-peso" id="packPeso"></p>
+      <button class="botao botao-limpar" id="removerTodosMods" type="button" disabled>Remover todos os mods</button>
       <button class="botao botao-forte" id="abrirExportar" type="button" disabled>Gerar instalador</button>
     </footer>
   </aside>
@@ -150,6 +151,15 @@
     <svg class="icone icone-subir" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 10l4-4 4 4"/></svg>
   </button>
 </nav>
+
+<dialog class="janela" id="janelaRemoverMods" aria-labelledby="tituloRemoverMods">
+  <h2 class="janela-titulo" id="tituloRemoverMods">Remover todos os mods</h2>
+  <div class="janela-corpo"><p id="textoRemoverMods"></p></div>
+  <div class="janela-rodape">
+    <button class="botao" id="cancelarRemocaoMods" type="button">Cancelar</button>
+    <button class="botao" id="confirmarRemocaoMods" type="button">Remover mods</button>
+  </div>
+</dialog>
 
 <!-- detalhe do mod -------------------------------------------------------- -->
 <dialog class="janela" id="janelaDetalhe">
@@ -236,13 +246,15 @@
     <div class="campo-linha">
       <label for="chaveCf">Chave da API da CurseForge</label>
       <p class="ajuda" id="ajudaChaveLocal">
-        A Modrinth funciona sem nada. A CurseForge exige uma chave própria — é gratuita.
-        Pegue em <a href="https://console.curseforge.com/#/api-keys" target="_blank" rel="noreferrer">console.curseforge.com</a>,
-        cole aqui e os mods de lá entram na busca.
+        A Modrinth funciona sem chave. Para usar a CurseForge, solicite uma chave de API
+        conforme as <a href="https://support.curseforge.com/support/solutions/articles/9000208346" target="_blank" rel="noreferrer">instruções da CurseForge</a>.
+        Depois cole a chave aqui e clique em Salvar. Ela vale para este app rodando no seu PC.
       </p>
       <p class="ajuda" id="ajudaChaveNuvem" hidden>
-        Neste site a CurseForge é configurada por quem hospeda. A Modrinth funciona
-        sempre; os mods da CurseForge aparecem na busca quando a chave do site está ligada.
+        Neste site, a chave é configurada pelo dono do projeto na Vercel:
+        <a href="https://vercel.com/docs/environment-variables/managing-environment-variables" target="_blank" rel="noreferrer">Settings → Environment Variables</a>,
+        nome <code>CURSEFORGE_API_KEY</code>, ambiente Production. Depois é preciso fazer Redeploy.
+        A chave salva no app local não ativa a CurseForge neste site.
       </p>
       <input type="password" id="chaveCf" class="campo" placeholder="cole a chave aqui" autocomplete="off">
       <p class="estado-config" id="estadoCf"></p>

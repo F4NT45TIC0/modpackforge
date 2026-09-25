@@ -17,6 +17,7 @@ Dois cliques em **`ModpackForge.bat`**. Ele abre o navegador na interface.
 3. Para montar seu pack, clique em **Adicionar**. A partir daí a interface trabalha sozinha:
    - as **dependências entram junto** e aparecem marcadas com "exigido por";
    - os mods **incompatíveis ficam bloqueados**, com o motivo escrito ao lado.
+   - **Remover todos os mods** tira de uma vez os mods escolhidos; shaders, recursos e dependências necessárias para eles permanecem no pack.
 4. Clique em **Gerar instalador**. Shaders entram em `shaderpacks/`, pacotes de recursos em `resourcepacks/`, e o instalador adiciona um carregador de shaders compatível quando necessário. No detalhe de cada shader ou pacote de recursos também há um link para baixar só o `.zip`.
 
 Para baixar um **modpack pronto**, abra a aba correspondente, escolha uma versão e clique em **Baixar**. O ModpackForge entrega o `.mrpack` para importar no launcher e um `.sh` para instalar o lado servidor numa VPS Linux.
@@ -75,15 +76,19 @@ Exemplos de onde fica a pasta:
 
 ## CurseForge (opcional)
 
-A Modrinth funciona sem configurar nada. A CurseForge exige uma chave de API,
-que é gratuita:
+A Modrinth funciona sem configurar nada. Para usar a CurseForge, você precisa
+de uma chave de API aprovada para o seu projeto. A
+[CurseForge explica como solicitar a chave](https://support.curseforge.com/support/solutions/articles/9000208346):
 
-1. Entre em [console.curseforge.com](https://console.curseforge.com/#/api-keys).
-2. Copie a chave.
-3. No ModpackForge, clique em **Configurações** e cole.
+1. Solicite a chave pelo formulário indicado pela CurseForge e aguarde a aprovação.
+2. No PC, abra `ModpackForge.bat`, clique na engrenagem de **Configurações**,
+   cole a chave recebida e clique em **Salvar**. O app testa a chave antes de guardar.
 
 A chave é validada na hora e fica em `%APPDATA%\ModpackForge\config.json` — fora
 da pasta do app, então ela não vai junto se você compartilhar o ModpackForge.
+No site publicado, a chave salva no PC não tem efeito; configure
+`CURSEFORGE_API_KEY` na Vercel, em **Settings → Environment Variables** para
+**Production**, e faça um **Redeploy**. Não coloque a chave no repositório.
 
 Alguns mods da CurseForge têm o download automático desligado pelo autor. Esses
 o ModpackForge não consegue baixar por ninguém: ele avisa antes de gerar e o

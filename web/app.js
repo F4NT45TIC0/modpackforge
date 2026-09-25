@@ -551,6 +551,29 @@ function remover(chave) {
   desenharResultados();
 }
 
+const modsEscolhidos = () =>
+  [...estado.pack.entries()].filter(([, item]) => (item.tipo ?? 'mod') === 'mod');
+
+function abrirConfirmacaoRemoverMods() {
+  const mods = modsEscolhidos();
+  if (!mods.length) return;
+  $('#textoRemoverMods').textContent =
+    `Remover ${contar(mods.length, 'mod escolhido', 'mods escolhidos')}? Shaders e recursos continuam no pack, junto com os mods necessários para eles.`;
+  $('#janelaRemoverMods').showModal();
+}
+
+function confirmarRemocaoMods() {
+  const mods = modsEscolhidos();
+  $('#janelaRemoverMods').close();
+  if (!mods.length) return;
+  for (const [chave] of mods) estado.pack.delete(chave);
+  if (!estado.pack.size) estado.vistos.clear();
+  estado.plano = null;
+  agendarResolucao();
+  desenharResultados();
+  mostrarAviso(`${contar(mods.length, 'mod escolhido removido', 'mods escolhidos removidos')} do pack.`);
+}
+
 let timerResolucao;
 function agendarResolucao() {
   guardarRascunho();
@@ -558,6 +581,7 @@ function agendarResolucao() {
   clearTimeout(timerResolucao);
   if (!estado.pack.size) {
     estado.plano = null;
+    estado.resolvendo = false;
     desenharPack();
     return;
   }
@@ -641,6 +665,8 @@ const semMarcas = () => ({});
 function desenharPack() {
   const corpo = $('#packCorpo');
   const alertas = $('#packAlertas');
+  const quantidadeMods = modsEscolhidos().length;
+  $('#removerTodosMods').disabled = quantidadeMods === 0;
 
   if (!estado.pack.size) {
     corpo.innerHTML =
@@ -1184,6 +1210,9 @@ function ligarEventos() {
   }
 
   $('#abrirExportar').addEventListener('click', abrirExportar);
+  $('#removerTodosMods').addEventListener('click', abrirConfirmacaoRemoverMods);
+  $('#cancelarRemocaoMods').addEventListener('click', () => $('#janelaRemoverMods').close());
+  $('#confirmarRemocaoMods').addEventListener('click', confirmarRemocaoMods);
   $('#confirmarExportar').addEventListener('click', confirmarExportar);
   $('#fecharExportar').addEventListener('click', () => $('#janelaExportar').close());
 

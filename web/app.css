@@ -823,6 +823,8 @@ select.campo option { background: var(--pedra); color: var(--texto); }
 
 .pack-peso { margin: 0; font-size: var(--t-xs); color: var(--texto-apagado); font-family: var(--mono); }
 .pack-rodape .botao { width: 100%; min-height: 2.9rem; font-size: var(--t-base); }
+.pack-rodape .botao-limpar { min-height: 2.35rem; font-size: var(--t-sm); color: var(--texto-fraco); }
+.pack-rodape .botao-limpar:hover:not(:disabled) { color: var(--redstone-claro); background: var(--redstone-fundo); }
 
 /* elementos só do celular */
 .hotbar, .fundo-pack { display: none; }
