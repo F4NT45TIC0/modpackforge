@@ -24,7 +24,7 @@ import { gerarBat, gerarMrpack, gerarListaTexto, gerarSlug } from './exportar.mj
 import { gerarInstaladorServidor, gerarAjudaWindows } from './exportar-servidor.mjs';
 import { lerConfig, gravarConfig, caminhoDaConfig } from './store.mjs';
 import { limparCache } from './http.mjs';
-import { lerModpackPublicado, modsEmbutidos, prepararModpackPublicado } from './modpack-publicado.mjs';
+import { lerModpackPublicado, modsEmbutidos, prepararModpackPublicado, registrosDoModpack, registrosDoCliente } from './modpack-publicado.mjs';
 
 const RAIZ = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const PASTA_PACKS = path.join(RAIZ, 'packs');
@@ -94,7 +94,7 @@ function arquivoDoPlano(a) {
   return {
     path: `${tipo}/${a.arquivo.nome}`,
     hashes: { sha1: a.arquivo.sha1, ...(a.arquivo.sha512 ? { sha512: a.arquivo.sha512 } : {}) },
-    env: { client: 'required', server: tipo !== 'mods' || a.ladoServidor === 'unsupported' ? 'unsupported' : 'required' },
+    env: { client: a.ambiente === 'server' ? 'unsupported' : 'required', server: tipo !== 'mods' || a.ambiente === 'client' || a.ladoServidor === 'unsupported' ? 'unsupported' : 'required' },
     downloads: [a.arquivo.url],
     fileSize: a.arquivo.tamanho ?? 0,
     projetoId: a.fonte === 'modrinth' ? a.projetoId : null,
@@ -215,9 +215,11 @@ const rotas = {
     validarIdsModpack(projetoId, versaoId);
     const preparado = await prepararModpackPublicado(projetoId, versaoId, {
       memoriaMb: corpo.memoriaMb, porta: corpo.porta,
+      gerarServidor: false,
     });
+    const podeGerarServidor = preparado.resumo.verificacao.status !== 'bloqueado';
     let pasta = null;
-    if (!nuvem) {
+    if (!nuvem && podeGerarServidor) {
       pasta = path.join(PASTA_PACKS, gerarSlug(preparado.resumo.nome));
       await mkdir(pasta, { recursive: true });
       await writeFile(path.join(pasta, preparado.nomeArquivo), preparado.script);
@@ -225,7 +227,7 @@ const rotas = {
     return {
       pasta,
       mrpack: { nome: preparado.versao.arquivo.nome, url: preparado.versao.arquivo.url },
-      servidor: { nome: preparado.nomeArquivo, base64: preparado.script.toString('base64') },
+      servidor: podeGerarServidor ? { nome: preparado.nomeArquivo, base64: preparado.script.toString('base64') } : null,
       resumo: preparado.resumo,
     };
   },
@@ -251,6 +253,14 @@ const rotas = {
       caminho, nome: caminho.split('/').at(-1), slug: null, projetoId: null, versaoId: null,
       tipo: 'mod', icone: null, tamanho: base.entradas.get(caminho).descomprimido, embutido: true,
     })));
+    const registros = await registrosDoModpack(base);
+    const porCaminho = new Map(registros.map((r) => [r.caminho, r]));
+    for (const a of arquivos) {
+      const r = porCaminho.get(a.caminho);
+      a.modId = r?.meta?.modId ?? null;
+      a.sha1 = r?.arquivo?.sha1 ?? null;
+      a.verificado = Boolean(r?.meta && !r.meta.incompleto);
+    }
     const nomesEmbutidos = new Set(embutidos);
     const configuracoes = [...base.entradas.keys()].filter((nome) =>
       /^(overrides|client-overrides|server-overrides)\//.test(nome) && !nome.endsWith('/') && !nomesEmbutidos.has(nome));
@@ -274,7 +284,8 @@ const rotas = {
     if (itens.some((i) => i.fonte === 'modrinth' && porProjeto.has(i.projetoId))) {
       throw falha(409, 'Esse mod já está no modpack original. Remova a versão original antes de adicionar outra.');
     }
-    const plano = itens.length ? await resolver({ loader: base.loader, mc: base.mc, itens }) : null;
+    const contexto = registrosDoCliente(await registrosDoModpack(base, removidos));
+    const plano = itens.length ? await resolver({ loader: base.loader, mc: base.mc, loaderVersao: base.loaderVersao, itens, contexto }) : null;
     if (plano && (plano.resumo.bloqueios || plano.faltando.length || plano.erros.length)) {
       throw falha(409, 'Os mods adicionais têm conflitos ou arquivos sem versão. Resolva antes de gerar.');
     }
@@ -296,6 +307,7 @@ const rotas = {
       base, removidos, acrescidos: extras,
       nome: String(corpo.nome ?? '').trim().slice(0, 80) || `${base.projeto.nome} editado`,
       memoriaMb: corpo.memoriaMb, porta: corpo.porta,
+      gerarServidor: corpo.gerarServidor !== false,
     });
     const revisao = createHash('sha256')
       .update(JSON.stringify({ nome: preparado.indice.name, removidos: [...removidos].sort(), extras }))
@@ -304,7 +316,7 @@ const rotas = {
     return {
       origem: { url: base.versao.arquivo.url, nome: base.versao.arquivo.nome, tamanho: base.versao.arquivo.tamanho },
       indice: preparado.indice,
-      servidor: { nome: preparado.nomeArquivo, base64: preparado.script.toString('base64') },
+      servidor: corpo.gerarServidor !== false ? { nome: preparado.nomeArquivo, base64: preparado.script.toString('base64') } : null,
       resumo: preparado.resumo,
       removidosEmbutidos: preparado.removidosEmbutidos,
       adicionais: extras.length,
@@ -317,7 +329,17 @@ const rotas = {
     if (!itens.length) {
       return { alvo: { loader, mc }, arquivos: [], conflitos: [], faltando: [], erros: [], manuais: [], trocas: [], resumo: RESUMO_VAZIO };
     }
-    return resolver({ loader, mc, itens });
+    let contexto = [];
+    let loaderVersao = String(corpo.loaderVersao ?? '').slice(0, 40) || null;
+    if (corpo.base) {
+      validarIdsModpack(corpo.base.projetoId, corpo.base.versaoId);
+      if (!Array.isArray(corpo.base.removidos) || corpo.base.removidos.length > 1500) throw falha(400, 'Remoções inválidas');
+      const base = await lerModpackPublicado(corpo.base.projetoId, corpo.base.versaoId);
+      if (base.mc !== mc || base.loader !== loader) throw falha(400, 'Alvo diferente do modpack original');
+      contexto = registrosDoCliente(await registrosDoModpack(base, corpo.base.removidos));
+      loaderVersao = base.loaderVersao;
+    }
+    return resolver({ loader, mc, loaderVersao, itens, contexto });
   },
 
   'POST exportar': async ({ corpo, nuvem }) => {
@@ -338,7 +360,7 @@ const rotas = {
       loaderVersao,
     };
 
-    const plano = await resolver({ loader, mc, itens });
+    const plano = await resolver({ loader, mc, loaderVersao, itens });
     if (plano.resumo.bloqueios || plano.faltando.length || plano.erros.length) {
       throw falha(409, 'Este pack ainda tem conflitos ou arquivos sem versão. Resolva antes de gerar.');
     }
@@ -364,7 +386,7 @@ const rotas = {
       arquivos.push({ tipo: 'servidor', arquivo: sh.nomeArquivo, conteudo: sh.conteudo });
       const ajuda = await gerarAjudaWindows(plano, opcoes);
       arquivos.push({ tipo: 'servidor-lista', arquivo: ajuda.nomeArquivo, conteudo: ajuda.conteudo });
-      servidor = { mods: sh.contagem, somenteCliente: sh.somenteCliente, manuais: sh.manuais };
+      servidor = { mods: sh.contagem, somenteCliente: sh.somenteCliente, manuais: sh.manuais, verificacao: sh.verificacao };
     }
 
     // No PC os arquivos também ficam em packs/. No site não há disco onde

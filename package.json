@@ -9,6 +9,7 @@
   },
   "scripts": {
     "start": "node server.mjs",
-    "verificar": "node verificar.mjs"
+    "verificar": "node verificar.mjs",
+    "test": "node --test"
   }
 }

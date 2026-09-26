@@ -236,6 +236,51 @@ dela. Todo visitante usa a cota da sua chave.
   amigos isso não pesa; se o link se espalhar, vale olhar o painel de uso da
   Vercel.
 
+## Verificação de mods e servidor
+
+- O mesmo mod não pode entrar duas vezes por lojas diferentes. A interface usa
+  nome/slug, e a exportação confere também hash, caminho e IDs declarados nos JARs.
+- Mods originais sem cadastro nas lojas e bibliotecas embutidas contam como
+  dependências instaladas. A leitura inclui Fabric, Quilt, Forge e NeoForge.
+- Antes de gerar o servidor, a API confere o conjunto que realmente será
+  instalado: dependências, faixas de versão, conflitos declarados, Minecraft,
+  loader e Java. Mods exclusivos do cliente ficam de fora. Bibliotecas que
+  declaram suporte aos dois lados são preservadas quando o servidor precisa delas.
+- JARs ilegíveis ou regras não suportadas aparecem como **verificação incompleta**.
+  Ausência de cadastro em loja não significa incompatibilidade. A leitura das
+  declarações não prova que mixins, código ou configurações vão funcionar.
+- Os instaladores baixam até seis arquivos em paralelo, verificam SHA-1,
+  reutilizam downloads válidos e removem JARs antigos gerenciados por eles.
+  Falhas interrompem a instalação. O loader é reinstalado quando a versão muda.
+
+Depois de instalar, com o servidor principal parado e o EULA aceito por você,
+rode na pasta do servidor:
+
+```sh
+bash verificar-servidor.sh
+```
+
+O teste usa um mundo temporário e porta dinâmica, espera a mensagem `Done`,
+envia `stop` e salva `verificacao-boot-*.log`. O mundo de teste é descartado.
+O teste não confirma estabilidade durante o jogo e mods podem escrever suas
+configurações durante a inicialização. Requer Bash, `setsid` e `mkfifo` no Linux.
+O limite padrão é 300 segundos; para packs maiores:
+
+```sh
+MPF_TEMPO_TESTE=600 bash verificar-servidor.sh
+```
+
+`verificacao-pack.txt` guarda a auditoria feita antes da geração. Para conferir
+os JARs locais, incluindo mods que não estão em lojas:
+
+```sh
+node verificar.mjs "caminho/mods" --servidor --loader fabric --mc 1.21.1 --loader-versao 0.16.14
+```
+
+A verificação local retorna 0 quando as declarações conferem, 1 quando encontra
+bloqueio e 2 quando há avisos ou metadados incompletos. `npm test` executa as
+regressões; testes de shell precisam de Bash, e os de boot precisam de `setsid`.
+
 ## Requisitos
 
 - **Node.js 20+** para rodar o ModpackForge (só em quem monta o pack).

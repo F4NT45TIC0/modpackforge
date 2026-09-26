@@ -1,4 +1,4 @@
-// Ajusta o pack até ele realmente abrir.
+// Ajusta as versões usando as dependências declaradas nos JARs.
 //
 // O resolver escolhe "a versão mais nova de cada mod". Isso monta uma lista que
 // parece certa e o Fabric recusa, porque cada jar traz exigências que a API das
@@ -12,6 +12,7 @@
 
 import { lerMetadados, MODS_DO_AMBIENTE } from './jarmeta.mjs';
 import { satisfaz, comparar, descreverExigencia } from './versoes.mjs';
+import { auditarPack } from './auditoria.mjs';
 
 // Orçamento de passos do ajuste. Cada dependência descoberta e cada troca de
 // versão gasta um passo, e um pack de 30 mods gasta dezenas.
@@ -55,11 +56,11 @@ function ignoravel(modid, indice) {
   return false;
 }
 
-async function anexarMetadados(registros) {
+async function anexarMetadados(registros, loader) {
   await Promise.all(
     registros.map(async (r) => {
       if (r.meta !== undefined) return;
-      r.meta = await lerMetadados(r.arquivo?.url, r.arquivo?.tamanho);
+      r.meta = await lerMetadados(r.arquivo?.url, r.arquivo?.tamanho, loader);
     }),
   );
 }
@@ -73,11 +74,11 @@ function exigenciasSobre(modid, registros, exceto) {
   const proibido = [];
   for (const outro of registros) {
     if (outro === exceto || !outro.meta) continue;
-    const dep = outro.meta.depende?.[modid];
+    const dep = (outro.meta.dependeCliente ?? outro.meta.depende)?.[modid];
     if (dep != null && String(dep) !== '*') {
       precisa.push({ faixa: dep, de: outro.nome, registro: outro, dialeto: outro.meta.dialeto });
     }
-    const quebra = outro.meta.quebra?.[modid];
+    const quebra = (outro.meta.quebraCliente ?? outro.meta.quebra)?.[modid];
     if (quebra != null) {
       proibido.push({ faixa: quebra, de: outro.nome, registro: outro, dialeto: outro.meta.dialeto });
     }
@@ -98,6 +99,7 @@ function aplicarVersao(registro, candidata, meta) {
 }
 
 async function candidatasDe(registro, listarVersoes) {
+  if (registro.fixado || registro.origem === 'original') return [];
   return (await listarVersoes(registro.fonte, registro.projetoId))
     .filter((v) => v.arquivo?.url)
     .sort((a, b) => comparar(b.numero, a.numero))
@@ -113,7 +115,7 @@ async function candidatasDe(registro, listarVersoes) {
  * o que fazer por ele — mas existe um Sodium 0.6 que convive com os dois, e é o
  * Sodium que precisa ceder.
  */
-async function cederQuemExige(encurralado, exigencias, registros, listarVersoes) {
+async function cederQuemExige(encurralado, exigencias, registros, listarVersoes, alvo) {
   const modid = encurralado.meta?.modId;
   const versaoAtual = encurralado.meta?.versao ?? encurralado.versaoNumero;
   if (!modid) return null;
@@ -123,12 +125,12 @@ async function cederQuemExige(encurralado, exigencias, registros, listarVersoes)
   for (const culpado of culpados) {
     for (const candidata of await candidatasDe(culpado, listarVersoes)) {
       if (candidata.id === culpado.versaoId) continue;
-      const meta = await lerMetadados(candidata.arquivo.url, candidata.arquivo.tamanho);
+      const meta = await lerMetadados(candidata.arquivo.url, candidata.arquivo.tamanho, alvo.loader);
       if (!meta) continue;
 
-      const exige = meta.depende?.[modid];
+      const exige = (meta.dependeCliente ?? meta.depende)?.[modid];
       if (exige != null && !satisfaz(versaoAtual, exige, meta.dialeto)) continue;
-      const quebra = meta.quebra?.[modid];
+      const quebra = (meta.quebraCliente ?? meta.quebra)?.[modid];
       if (quebra != null && satisfaz(versaoAtual, quebra, meta.dialeto)) continue;
       if (criaConflitoNovo(meta, registros, culpado)) continue;
 
@@ -157,15 +159,14 @@ function versaoAtende(versaoTexto, { precisa, proibido }) {
  * @param {Function} entrada.listarVersoes    (fonte, projetoId) => versões compatíveis
  * @param {Function} entrada.acharPorModId    (modid) => registro novo ou null
  */
-export async function ajustar({ registros, listarVersoes, acharPorModId }) {
+export async function ajustar({ registros, listarVersoes, acharPorModId, alvo = {} }) {
   const trocas = [];
   const adicionados = [];
   const problemas = [];
   const modIdsProcurados = new Set();
-  const naoEncontrados = new Set();
   const trocasPorMod = new Map(); // impede ficar trocando o mesmo mod pra sempre
 
-  await anexarMetadados(registros);
+  await anexarMetadados(registros, alvo.loader);
 
   let passos = 0;
   let esgotouOrcamento = false;
@@ -185,7 +186,8 @@ export async function ajustar({ registros, listarVersoes, acharPorModId }) {
     // ---- 1. o que está faltando ------------------------------------------
     const faltantes = new Map(); // modid -> [{ faixa, de }]
     for (const r of registros) {
-      for (const [modid, faixa] of Object.entries(r.meta?.depende ?? {})) {
+      for (const [modid, faixa] of Object.entries(r.meta?.dependeCliente ?? r.meta?.depende ?? {})) {
+        if (modid === 'mixinextras' && ['fabric', 'quilt'].includes(alvo.loader)) continue;
         if (indice.has(modid) || ignoravel(modid, indice)) continue;
         if (!faltantes.has(modid)) faltantes.set(modid, []);
         faltantes.get(modid).push({ faixa, de: r.nome });
@@ -200,12 +202,10 @@ export async function ajustar({ registros, listarVersoes, acharPorModId }) {
       if (novo) {
         novo.origem = 'dependencia';
         novo.exigidoPor = [...new Set(quemPede.map((q) => q.de))];
-        novo.meta = await lerMetadados(novo.arquivo?.url, novo.arquivo?.tamanho);
+        novo.meta ??= await lerMetadados(novo.arquivo?.url, novo.arquivo?.tamanho, alvo.loader);
         registros.push(novo);
         adicionados.push({ nome: novo.nome, modid, exigidoPor: novo.exigidoPor });
         mexeu = true;
-      } else {
-        naoEncontrados.add(modid);
       }
     }
     if (mexeu) continue; // reavalia com os novos mods no bolo
@@ -225,7 +225,7 @@ export async function ajustar({ registros, listarVersoes, acharPorModId }) {
 
       let escolhida = null;
       for (const candidata of candidatas) {
-        const meta = await lerMetadados(candidata.arquivo.url, candidata.arquivo.tamanho);
+        const meta = await lerMetadados(candidata.arquivo.url, candidata.arquivo.tamanho, alvo.loader);
         const versaoTexto = meta?.versao ?? candidata.numero;
         if (!versaoAtende(versaoTexto, exigencias)) continue;
         // A troca não pode criar um problema novo com o resto do pack.
@@ -252,7 +252,7 @@ export async function ajustar({ registros, listarVersoes, acharPorModId }) {
 
       // Nenhuma versão deste mod serve. Antes de desistir, tenta fazer quem
       // exige ceder — muitas vezes é o outro lado que tem folga.
-      const cedeu = await cederQuemExige(r, exigencias, registros, listarVersoes);
+      const cedeu = await cederQuemExige(r, exigencias, registros, listarVersoes, alvo);
       if (cedeu) {
         trocas.push(cedeu);
         mexeu = true;
@@ -273,7 +273,8 @@ export async function ajustar({ registros, listarVersoes, acharPorModId }) {
   // conferir nada e o pack era dado como bom. Foi assim que um pack com o Iris
   // e o Sodium brigando passou direto e só quebrou na hora de jogar. Terminar
   // sem resposta nunca pode virar "está tudo certo".
-  problemas.push(...auditar(registros, naoEncontrados));
+  const verificacao = auditarPack(registros, { ...alvo, lado: 'client' });
+  problemas.push(...verificacao.bloqueios);
 
   if (esgotouOrcamento) {
     problemas.push({
@@ -293,80 +294,13 @@ export async function ajustar({ registros, listarVersoes, acharPorModId }) {
     return true;
   });
 
-  return { registros, trocas, adicionados, problemas: unicos };
-}
-
-/**
- * Confere o pack inteiro do zero, do jeito que o Fabric Loader confere ao abrir
- * o jogo: toda dependência tem que estar presente e na faixa pedida, e nenhum
- * "breaks" pode bater.
- *
- * Isto roda sempre, independente de o ajuste ter conseguido resolver tudo. É o
- * que garante que um pack quebrado nunca seja entregue como bom.
- */
-function auditar(registros, naoEncontrados) {
-  const problemas = [];
-  const indice = indexarPorModId(registros);
-
-  for (const r of registros) {
-    if (!r.meta) continue;
-    const versaoDeR = r.meta.versao ?? r.versaoNumero;
-
-    for (const [modid, faixa] of Object.entries(r.meta.depende ?? {})) {
-      if (ignoravel(modid, indice)) continue;
-      const alvo = indice.get(modid);
-
-      if (!alvo) {
-        problemas.push({
-          tipo: 'dependencia-nao-encontrada',
-          modid,
-          nome: r.nome,
-          chave: r.chave,
-          comQuem: [],
-          texto: naoEncontrados.has(modid)
-            ? `${r.nome} precisa de "${modid}", que não existe em nenhuma das lojas com esse nome.`
-            : `${r.nome} precisa de "${modid}", que não está no pack.`,
-        });
-        continue;
-      }
-
-      const versaoAlvo = alvo.versao;
-      if (!satisfaz(versaoAlvo, faixa, r.meta.dialeto)) {
-        problemas.push({
-          tipo: 'sem-versao-possivel',
-          nome: r.nome,
-          chave: r.chave,
-          comQuem: [alvo.registro.nome],
-          chaveOutro: alvo.registro.chave,
-          texto:
-            `${r.nome} ${versaoDeR} precisa de ${alvo.registro.nome} ${descreverExigencia(faixa)}, ` +
-            `e o pack só consegue ${versaoAlvo}. Tire um dos dois.`,
-        });
-      }
-    }
-
-    for (const [modid, faixa] of Object.entries(r.meta.quebra ?? {})) {
-      const alvo = indice.get(modid);
-      if (!alvo || alvo.registro === r) continue;
-      const versaoAlvo = alvo.versao;
-      if (!satisfaz(versaoAlvo, faixa, r.meta.dialeto)) continue;
-      problemas.push({
-        tipo: 'incompativel-declarado',
-        nome: r.nome,
-        chave: r.chave,
-        comQuem: [alvo.registro.nome],
-        chaveOutro: alvo.registro.chave,
-        texto: `${r.nome} ${versaoDeR} não funciona junto com ${alvo.registro.nome} ${versaoAlvo}.`,
-      });
-    }
-  }
-  return problemas;
+  return { registros, trocas, adicionados, problemas: unicos, verificacao };
 }
 
 /** A versão candidata quebra alguém que já está no pack? */
 function criaConflitoNovo(meta, registros, exceto) {
   const indice = indexarPorModId(registros.filter((r) => r !== exceto));
-  for (const [modid, faixa] of Object.entries(meta.quebra ?? {})) {
+  for (const [modid, faixa] of Object.entries(meta.quebraCliente ?? meta.quebra ?? {})) {
     const outro = indice.get(modid);
     if (!outro) continue;
     if (satisfaz(outro.versao, faixa, meta.dialeto)) return true;

@@ -3,7 +3,7 @@
 // As regras de conflito vêm do mesmo módulo que o resolver usa no servidor,
 // então o bloqueio aparece na hora, sem ida e volta.
 
-import { checarCandidato } from '/compartilhado/conflitos.mjs';
+import { checarCandidato, mesmoMod } from '/compartilhado/conflitos.mjs';
 import { montarMrpackEditado } from '/editar-mrpack.mjs';
 
 const $ = (sel) => document.querySelector(sel);
@@ -473,9 +473,10 @@ function escolhidosParaChecagem() {
     ? estado.plano.arquivos
     : [...estado.pack.values()].map((m) => ({ ...m, incompativeis: [] }));
   return [...adicionais, ...arquivosOriginaisAtivos().map((a) => ({
-    chave: chaveDe('modrinth', a.projetoId), fonte: 'modrinth', projetoId: a.projetoId,
+    chave: a.projetoId ? chaveDe('modrinth', a.projetoId) : `original:${a.caminho}`, fonte: a.projetoId ? 'modrinth' : 'original', projetoId: a.projetoId,
     nome: a.nome, slug: a.slug, tipo: a.tipo, incompativeis: [],
-  }))];
+    modId: a.modId, sha1: a.sha1,
+  })), ...estado.pack.values()];
 }
 
 function desenharResultados() {
@@ -590,6 +591,11 @@ function desenharResultados() {
 function adicionar(chave) {
   const mod = estado.resultados.find((m) => chaveDe(m.fonte, m.id) === chave);
   if (!mod || estado.pack.has(chave) || (mod.fonte === 'modrinth' && originalNoPack(mod.id))) return;
+  const duplicado = escolhidosParaChecagem().find((a) => mesmoMod(mod, a));
+  if (duplicado) {
+    mostrarAviso(`${duplicado.nome} já está no pack. Remova a cópia atual antes de trocar de loja.`, 'erro');
+    return;
+  }
   estado.pack.set(chave, {
     fonte: mod.fonte,
     projetoId: mod.id,
@@ -662,7 +668,8 @@ async function resolverPack() {
   }));
   try {
     const plano = await api('/api/resolver', {
-      corpo: { loader: estado.loader, mc: estado.mc, itens },
+      corpo: { loader: estado.loader, mc: estado.mc, loaderVersao: estado.loaderVersao, itens,
+        base: estado.importado ? { projetoId: estado.importado.projeto.id, versaoId: estado.importado.versao.id, removidos: estado.importado.removidos } : null },
     });
     if (resolucaoId !== estado.resolucaoId) return;
     estado.plano = plano;
@@ -967,6 +974,15 @@ async function abrirDetalhe(chave) {
   }
 }
 
+function mostrarVerificacaoServidor(v) {
+  if (!v) return '';
+  return `<section class="ajuda"><strong>Verificação do servidor: ${v.status === 'declaracoes-conferidas' ? 'declarações conferidas' : v.status === 'bloqueado' ? 'bloqueado' : 'incompleta'}</strong>
+    <p>${v.verificados}/${v.total} JARs conferidos. ${v.javaPermitidos?.length <= 6 ? `Java permitido: ${v.javaPermitidos.join(', ')}` : `Java mínimo: ${v.javaMinimo}`}.</p>
+    ${v.avisos.length ? `<details><summary>Avisos (${v.avisos.length})</summary><ul>${v.avisos.map((a) => `<li>${esc(a.texto)}</li>`).join('')}</ul></details>` : ''}
+    ${v.bloqueios.length ? `<p>O .sh foi bloqueado. Corrija estes problemas na edição do pack:</p><ul>${v.bloqueios.map((a) => `<li>${esc(a.texto)}</li>`).join('')}</ul>` :
+      '<p>Depois de instalar, com o servidor parado, rode <code>bash verificar-servidor.sh</code> na pasta dele. O teste inicia com um mundo temporário, encerra e salva um log. A conferência das declarações não garante que o servidor abra.</p>'}</section>`;
+}
+
 async function baixarModpack(projetoId, versaoId, botao) {
   botao.disabled = true;
   botao.textContent = 'Preparando…';
@@ -979,13 +995,14 @@ async function baixarModpack(projetoId, versaoId, botao) {
       },
     });
     for (const url of urlsDeDownload) URL.revokeObjectURL(url);
-    urlsDeDownload = [urlDoArquivo(dados.servidor.base64)];
+    urlsDeDownload = dados.servidor ? [urlDoArquivo(dados.servidor.base64)] : [];
     $('#resultadoModpack').innerHTML = `<p class="ajuda"><strong>${esc(dados.resumo.nome)}</strong> — ${esc(dados.resumo.mc)}, ${esc(dados.resumo.loader)} ${esc(dados.resumo.loaderVersao)}. ${dados.resumo.arquivos} arquivos no servidor; ${dados.resumo.excluidos} exclusivos do cliente ficaram de fora.</p>
       <ul class="downloads">
         <li><a class="botao" href="${esc(dados.mrpack.url)}" target="_blank" rel="noreferrer">Baixar ${esc(dados.mrpack.nome)}</a></li>
-        <li><a class="botao" href="${urlsDeDownload[0]}" download="${esc(dados.servidor.nome)}">Baixar ${esc(dados.servidor.nome)}</a></li>
+        ${dados.servidor ? `<li><a class="botao" href="${urlsDeDownload[0]}" download="${esc(dados.servidor.nome)}">Baixar ${esc(dados.servidor.nome)}</a></li>` : ''}
       </ul>
-      <p class="ajuda">Na VPS: <code>bash ${esc(dados.servidor.nome)}</code>. O script baixa os arquivos do pack, aplica as configurações de servidor e pede o aceite do EULA.</p>
+      ${dados.servidor ? `<p class="ajuda">Na VPS: <code>bash ${esc(dados.servidor.nome)}</code>. O script baixa os arquivos do pack, aplica as configurações de servidor e pede o aceite do EULA.</p>` : ''}
+      ${mostrarVerificacaoServidor(dados.resumo.verificacao)}
       ${dados.pasta ? `<p class="caminho">O .sh também foi salvo em ${esc(dados.pasta)}</p><button class="botao" id="abrirPastaModpack">Abrir a pasta</button>` : ''}`;
     $('#abrirPastaModpack')?.addEventListener('click', () => api('/api/abrir-pasta', { corpo: { pasta: dados.pasta } }));
   } catch (erro) {
@@ -1105,6 +1122,7 @@ async function exportarImportado(formatos) {
       nome: $('#expNome').value.trim(),
       memoriaMb: Number($('#expMemoria').value),
       porta: Number($('#expPorta').value) || 25565,
+      gerarServidor: formatos.includes('servidor'),
     },
   });
   const gerados = [];
@@ -1126,6 +1144,7 @@ async function exportarImportado(formatos) {
   caixa.innerHTML = `<strong>Pronto. Modpack editado com ${dados.indice.files.length} arquivos de download.</strong>
     <p>Os ${base.configuracoes.length} arquivos de configuração e outros overrides originais foram preservados no .mrpack. ${dados.resumo.arquivos} arquivos entram no servidor; ${dados.resumo.excluidos} exclusivos do cliente ficam de fora.</p>
     <ul class="downloads">${gerados.map((g) => `<li><a class="botao" href="${g.url}" download="${esc(g.nome)}">Baixar ${esc(g.nome)}</a><span class="tamanho">${formatarTamanho(g.tamanho)}</span></li>`).join('')}</ul>
+    ${formatos.includes('servidor') ? mostrarVerificacaoServidor(dados.resumo.verificacao) : ''}
     ${formatos.includes('servidor') ? '<p>Na VPS, rode o arquivo com <code>bash nome-do-arquivo.sh</code>. O script busca os arquivos originais para aplicar as configurações de servidor.</p>' : ''}`;
 }
 
@@ -1177,7 +1196,7 @@ async function confirmarExportar() {
              ? `${dados.servidor.somenteCliente.length} ficaram de fora por serem só de cliente (${esc(dados.servidor.somenteCliente.join(', '))}) — eles derrubariam o servidor.`
              : ''
          }
-         Mande o <strong>.sh</strong> para a VPS e rode <span class="caminho">bash nome-do-arquivo.sh</span>.</p>`
+         Mande o <strong>.sh</strong> para a VPS e rode <span class="caminho">bash nome-do-arquivo.sh</span>.</p>${mostrarVerificacaoServidor(dados.servidor.verificacao)}`
       : '';
 
     const tem = (tipo) => dados.gerados.some((g) => g.tipo === tipo);

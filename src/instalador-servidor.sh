@@ -19,6 +19,8 @@ LOADER_LANCADOR="@@LOADER_LANCADOR@@"
 MEMORIA_MB="@@MEMORIA_MB@@"
 PORTA="@@PORTA@@"
 TOTAL_MODS="@@TOTAL_MODS@@"
+JAVA_MINIMO=@@JAVA_MINIMO@@
+JAVA_PERMITIDOS="@@JAVA_PERMITIDOS@@"
 
 LOADER_ARGS=(@@LOADER_ARGS@@)
 
@@ -96,6 +98,7 @@ if command -v sha1sum >/dev/null 2>&1; then SHA1="sha1sum"
 elif command -v shasum >/dev/null 2>&1; then SHA1="shasum"
 fi
 calcular_sha1() { [ -n "$SHA1" ] && $SHA1 "$1" | cut -d' ' -f1 || echo ""; }
+[ -n "$SHA1" ] || { erro 'Preciso de sha1sum ou shasum para conferir os downloads.'; exit 1; }
 
 titulo "Java"
 if ! command -v java >/dev/null 2>&1; then
@@ -106,6 +109,12 @@ if ! command -v java >/dev/null 2>&1; then
   exit 1
 fi
 JAVA_VERSAO=$(java -version 2>&1 | head -1)
+JAVA_NUMERO=$(printf '%s' "$JAVA_VERSAO" | awk -F '"' '{print $2}' | cut -d. -f1)
+[ "$JAVA_NUMERO" != 1 ] || JAVA_NUMERO=$(printf '%s' "$JAVA_VERSAO" | awk -F '"' '{print $2}' | cut -d. -f2)
+if ! [[ "$JAVA_NUMERO" =~ ^[0-9]+$ ]] || ! [[ " $JAVA_PERMITIDOS " == *" $JAVA_NUMERO "* ]]; then
+  erro "Java incompativel com este pack. Encontrado: $JAVA_VERSAO"
+  nota "Versoes permitidas: $JAVA_PERMITIDOS"; exit 1
+fi
 ok "$JAVA_VERSAO"
 
 # ------------------------------------------------------------------ destino
@@ -125,8 +134,11 @@ titulo "Modloader"
 # Marcadores concretos de que o loader ja foi instalado aqui. Testar a pasta
 # "libraries" nao serve: ela existe assim que o instalador comeca.
 JA_INSTALADO=0
-if [ -n "$LOADER_LANCADOR" ] && [ -f "$DESTINO/$LOADER_LANCADOR" ]; then JA_INSTALADO=1; fi
-if [ -f "$DESTINO/run.sh" ]; then JA_INSTALADO=1; fi
+MARCA_LOADER="$LOADER_NOME|$MC_VERSAO|$LOADER_VERSAO"
+if [ "$(cat "$DESTINO/.modpackforge-loader" 2>/dev/null)" = "$MARCA_LOADER" ]; then
+  if [ -n "$LOADER_LANCADOR" ] && [ -f "$DESTINO/$LOADER_LANCADOR" ]; then JA_INSTALADO=1; fi
+  if [ -f "$DESTINO/run.sh" ]; then JA_INSTALADO=1; fi
+fi
 
 if [ "$JA_INSTALADO" = "1" ]; then
   ok "$LOADER_NOME ja esta instalado aqui."
@@ -148,6 +160,7 @@ else
     exit 1
   fi
   rm -f "$TEMP_JAR" "$DESTINO"/*installer*.log 2>/dev/null
+  printf '%s\n' "$MARCA_LOADER" > "$DESTINO/.modpackforge-loader"
 fi
 
 # -------------------------------------------------------------------- mods
@@ -166,6 +179,10 @@ baixar_mod() { # nome arquivo sha1 url posicao
   if [ -f "$destino" ] && [ -n "$sha" ] && [ "$(calcular_sha1 "$destino")" = "$sha" ]; then
     printf '  [%3d/%d] %s%s ja estava aqui%s\n' "$pos" "$TOTAL_MODS" "$nome" "$CINZ" "$N"
     return 2
+  fi
+  if [ -z "$url" ]; then
+    printf '  Download manual necessario: %s. Coloque %s em mods/ e rode novamente.\n' "$nome" "$arquivo" >&2
+    return 1
   fi
   if ! baixar_para "$url" "$destino.parcial"; then
     printf '  [%3d/%d] %s%s falhou (download)%s\n' "$pos" "$TOTAL_MODS" "$nome" "$VERM" "$N"
@@ -205,12 +222,18 @@ while read -r codigo; do
   esac
 done < "$RESULTADOS"
 rm -f "$RESULTADOS"
+if [ "$falhou" -gt 0 ]; then
+  erro "$falhou arquivos falharam ou precisam de download manual. Instalacao incompleta; rode novamente."
+  rm -f "$ESPERADOS"
+  exit 1
+fi
 
 # Tira o que este instalador colocou antes e o pack nao usa mais.
 removidos=0
 if [ -f "$REGISTRO" ]; then
   while read -r antigo; do
     [ -z "$antigo" ] && continue
+    [[ "$antigo" != *'/'* && "$antigo" != *'\'* && "$antigo" != '..' && "$antigo" == *.jar ]] || continue
     if ! grep -qxF "$antigo" "$ESPERADOS" && [ -f "$DESTINO/mods/$antigo" ]; then
       rm -f "$DESTINO/mods/$antigo"; removidos=$((removidos + 1))
     fi
@@ -264,12 +287,12 @@ MEM=$MEMORIA_MB
 if [ -f run.sh ]; then
   # Forge e NeoForge geram o proprio script de inicializacao.
   printf -- '-Xmx%sM -Xms1024M\n' "\$MEM" > user_jvm_args.txt
-  exec ./run.sh nogui
+  exec ./run.sh nogui "\$@"
 fi
 
 for jar in $LOADER_LANCADOR quilt-server-launch.jar fabric-server-launch.jar server.jar minecraft_server.jar; do
   if [ -n "\$jar" ] && [ -f "\$jar" ]; then
-    exec java -Xmx\${MEM}M -Xms1024M -XX:+UseG1GC -jar "\$jar" nogui
+    exec java -Xmx\${MEM}M -Xms1024M -XX:+UseG1GC -jar "\$jar" nogui "\$@"
   fi
 done
 
@@ -278,6 +301,13 @@ exit 1
 INICIAR
 chmod +x "$DESTINO/iniciar.sh"
 [ -f "$DESTINO/run.sh" ] && chmod +x "$DESTINO/run.sh" 2>/dev/null
+cat > "$DESTINO/verificacao-pack.txt" <<'MPF_RELATORIO'
+@@VERIFICACAO@@
+MPF_RELATORIO
+cat > "$DESTINO/verificar-servidor.sh" <<'MPF_TESTE_BOOT'
+@@VERIFICADOR@@
+MPF_TESTE_BOOT
+chmod +x "$DESTINO/verificar-servidor.sh"
 
 # -------------------------------------------------------------- fechamento
 
@@ -285,6 +315,8 @@ titulo "Pronto"
 ok "$baixados baixados, $reaproveitados ja estavam na pasta, $removidos removidos."
 [ "$falhou" -gt 0 ] && aviso "$falhou falharam. Rode de novo: ele so tenta os que faltaram."
 nota "Pasta do servidor: $DESTINO"
+nota "Para testar o boot: cd \"$DESTINO\" && bash verificar-servidor.sh"
+nota "Resultado da auditoria: verificacao-pack.txt. O teste de boot gera um log separado."
 
 if [ "${#SOMENTE_CLIENTE[@]}" -gt 0 ] && [ -n "${SOMENTE_CLIENTE[0]:-}" ]; then
   printf '\n'

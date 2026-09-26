@@ -34,13 +34,6 @@ export const GRUPOS = [
     membros: ['starlight', 'phosphor'],
   },
   {
-    id: 'cache-de-entidades',
-    severidade: 'bloqueio',
-    titulo: 'Culling de entidades duplicado',
-    motivo: 'Os dois interceptam o mesmo ponto de renderização de entidades.',
-    membros: ['entityculling', 'entity-culling', 'cull-leaves'],
-  },
-  {
     id: 'renderizacao-distante',
     severidade: 'aviso',
     titulo: 'Distant Horizons com Nvidium',
@@ -108,24 +101,41 @@ export function gruposDoMod(mod) {
  * Compara um candidato contra os mods já escolhidos.
  * Devolve a lista de choques, do mais grave para o menos.
  */
+export function mesmoMod(a, b) {
+  const hashA = a.arquivo?.sha1 ?? a.sha1, hashB = b.arquivo?.sha1 ?? b.sha1;
+  if (hashA && hashB && hashA.toLowerCase() === hashB.toLowerCase()) return true;
+  const idsA = a.meta?.idsPrincipais ?? [a.meta?.modId ?? a.modId].filter(Boolean);
+  const idsB = b.meta?.idsPrincipais ?? [b.meta?.modId ?? b.modId].filter(Boolean);
+  if (idsA.some((id) => idsB.includes(id))) return true;
+  const projetoA = a.projetoId ?? a.id, projetoB = b.projetoId ?? b.id;
+  if (a.fonte && a.fonte === b.fonte && projetoA && projetoB && String(projetoA) === String(projetoB)) return true;
+  if (idsA.length && idsB.length) return false;
+  // O catalogo nao expoe o mod ID na busca. Nome/slug servem como barreira
+  // imediata; o servidor confirma a identidade dentro dos JARs.
+  if (a.fonte !== b.fonte) {
+    const nomesA = [a.nome, a.slug].map(normalizar).filter(Boolean);
+    const nomesB = [b.nome, b.slug].map(normalizar).filter(Boolean);
+    return nomesA.some((nome) => nomesB.includes(nome));
+  }
+  return false;
+}
+
 export function checarCandidato(candidato, jaEscolhidos) {
   const choques = [];
   const gruposCandidato = gruposDoMod(candidato);
-  const normCandidato = normalizar(candidato.nome) || normalizar(candidato.slug);
 
   for (const atual of jaEscolhidos) {
-    if (atual.fonte === candidato.fonte && String(atual.projetoId ?? atual.id) === String(candidato.id ?? candidato.projetoId)) {
+    if ((atual.projetoId ?? atual.id) && atual.fonte === candidato.fonte && String(atual.projetoId ?? atual.id) === String(candidato.id ?? candidato.projetoId)) {
       continue; // é ele mesmo
     }
 
     // O mesmo mod vindo das duas lojas.
-    const normAtual = normalizar(atual.nome) || normalizar(atual.slug);
-    if (normCandidato && normCandidato === normAtual) {
+    if (mesmoMod(candidato, atual)) {
       choques.push({
         severidade: 'bloqueio',
         grupo: 'duplicado',
         titulo: 'Esse mod já está no pack',
-        motivo: `${atual.nome} já foi adicionado pela ${atual.fonte === 'modrinth' ? 'Modrinth' : 'CurseForge'}.`,
+        motivo: `${atual.nome} já está no pack (${atual.fonte === 'modrinth' ? 'Modrinth' : atual.fonte === 'curseforge' ? 'CurseForge' : 'arquivo original'}). Mantenha uma só cópia.`,
         outro: atual,
       });
       continue;

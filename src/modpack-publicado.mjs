@@ -4,6 +4,9 @@ import { planoDeInstalacaoServidor } from './loaders.mjs';
 import { gerarSlug } from './exportar.mjs';
 import { lerDiretorioZipRemoto, lerArquivoZipRemoto } from './ler-zip-remoto.mjs';
 import { checarCandidato } from '../web/compartilhado/conflitos.mjs';
+import { lerMetadados, lerMetadadosBuffer } from './jarmeta.mjs';
+import { auditarPack, exigirServidorValido, selecionarModsServidor } from './auditoria.mjs';
+import { criarVerificador, textoVerificacao } from './verificador-servidor.mjs';
 
 const MOLDE = new URL('./instalador-modpack.sh', import.meta.url);
 const DEPENDENCIAS = [
@@ -71,10 +74,61 @@ export async function lerModpackPublicado(projetoId, versaoId) {
   return { projeto, versao, indice, entradas, arquivos, mc, loader, loaderVersao };
 }
 
+/** Os JARs originais sao contexto de dependencias, mesmo sem cadastro em loja. */
+export async function registrosDoModpack(base, removidos = []) {
+  const remover = new Set(removidos);
+  const projetos = await modrinth.projetosEmLote(base.arquivos.map((a) => a.projetoId)).catch(() => []);
+  const porId = new Map(projetos.map((p) => [p.id, p]));
+  const registros = await Promise.all(base.arquivos.filter((a) => a.caminho.startsWith('mods/') && /\.jar$/i.test(a.caminho) && !remover.has(a.caminho)).map(async (a) => {
+    const p = porId.get(a.projetoId);
+    return {
+      chave: a.projetoId ? `modrinth:${a.projetoId}` : `original:${a.caminho}`, fonte: a.projetoId ? 'modrinth' : 'original',
+      projetoId: a.projetoId, versaoId: a.versaoId, nome: p?.nome ?? a.caminho.split('/').at(-1), slug: p?.slug,
+      caminho: a.caminho, tipo: 'mod', ladoServidor: a.env?.server === 'unsupported' ? 'unsupported' : p?.ladoServidor,
+      ladoCliente: a.env?.client === 'unsupported' ? 'unsupported' : p?.ladoCliente,
+      arquivo: { nome: a.caminho.split('/').at(-1), url: a.url, sha1: a.sha1, tamanho: base.indice.files.find((f) => f.path === a.caminho)?.fileSize ?? 0 },
+      meta: await lerMetadados(a.url, base.indice.files.find((f) => f.path === a.caminho)?.fileSize, base.loader, { publico: true }),
+      distribuicaoLiberada: true, origem: 'original', fixado: true, exigidoPor: [],
+    };
+  }));
+  // O override de servidor prevalece sobre o comum para o mesmo caminho.
+  const overrides = modsEmbutidos(base.entradas).filter((c) => !remover.has(c));
+  for (const caminho of overrides) {
+    let meta = null;
+    try {
+      const buf = await lerArquivoZipRemoto(base.versao.arquivo.url, base.entradas.get(caminho), 32 * 1024 * 1024);
+      meta = await lerMetadadosBuffer(buf, base.loader);
+    } catch { /* A auditoria relata a leitura incompleta. */ }
+    registros.push({ chave: `original:${caminho}`, fonte: 'original', nome: caminho.split('/').at(-1), caminho,
+      tipo: 'mod', ladoServidor: caminho.startsWith('client-overrides/') ? 'unsupported' : 'unknown',
+      ladoCliente: caminho.startsWith('server-overrides/') ? 'unsupported' : 'unknown',
+      arquivo: { nome: caminho.split('/').at(-1) }, meta, origem: 'original', fixado: true, distribuicaoLiberada: true, exigidoPor: [] });
+  }
+  return registros;
+}
+
+export function registrosDoCliente(registros) {
+  const porCaminho = new Map();
+  for (const r of registros) {
+    if (r.caminho.startsWith('server-overrides/') || r.ladoCliente === 'unsupported' || r.meta?.ambiente === 'server') continue;
+    porCaminho.set(r.caminho.replace(/^(overrides|client-overrides)\//, ''), r);
+  }
+  return [...porCaminho.values()];
+}
+
+export function registrosDoServidor(registros) {
+  const porCaminho = new Map();
+  for (const r of registros) {
+    if (r.caminho.startsWith('client-overrides/')) continue;
+    porCaminho.set(r.caminho.replace(/^(overrides|server-overrides)\//, ''), r);
+  }
+  return selecionarModsServidor([...porCaminho.values()]).servidor;
+}
+
 /** Gera um .sh com os arquivos do servidor, preservando os overrides originais. */
 export async function prepararModpackPublicado(projetoId, versaoId, {
   memoriaMb = 4096, porta = 25565, removidos = [], acrescidos = [], nome: nomeEditado = null,
-  base: baseLida = null,
+  base: baseLida = null, gerarServidor = true,
 } = {}) {
   const base = baseLida ?? await lerModpackPublicado(projetoId, versaoId);
   const { projeto, versao, indice, entradas, mc, loader, loaderVersao } = base;
@@ -98,6 +152,11 @@ export async function prepararModpackPublicado(projetoId, versaoId, {
     });
   }
   const excluidos = [];
+  const baseEditada = { ...base, indice: indiceEditado, arquivos };
+  const registros = await registrosDoModpack(baseEditada, removidos);
+  const servidor = registrosDoServidor(registros);
+  const verificacao = auditarPack(servidor, { lado: 'server', mc, loader, loaderVersao });
+  if (gerarServidor) exigirServidorValido(verificacao);
 
   // Alguns autores marcam todos os arquivos como necessários no servidor, até
   // Sodium e Iris. Conferimos os projetos e versões de cada mod hospedado na
@@ -130,31 +189,13 @@ export async function prepararModpackPublicado(projetoId, versaoId, {
     }
   }
   const candidatos = new Set(arquivos.filter((a) => {
-    const projeto = projetosPorId.get(a.projetoId);
     const versao = versoesPorId.get(a.versaoId);
+    if (a.caminho.startsWith('mods/')) return servidor.some((r) => r.caminho === a.caminho);
     return !['eula.txt', 'run.sh', 'iniciar.sh', 'server.jar'].includes(a.caminho) &&
       !['shaderpacks/', 'resourcepacks/'].some((prefixo) => a.caminho.startsWith(prefixo)) &&
-      a.env?.server !== 'unsupported' && projeto?.ladoServidor !== 'unsupported' &&
+      a.env?.server !== 'unsupported' &&
       !['client_only', 'singleplayer_only'].includes(versao?.environment);
   }));
-  let mudou = true;
-  while (mudou) {
-    mudou = false;
-    const exigidos = new Set();
-    for (const a of candidatos) {
-      for (const d of versoesPorId.get(a.versaoId)?.dependencies ?? []) {
-        if (d.dependency_type === 'required' && d.project_id) exigidos.add(d.project_id);
-      }
-    }
-    for (const a of arquivos) {
-      if (!candidatos.has(a) && exigidos.has(a.projetoId) && a.env?.server !== 'unsupported' &&
-          !['eula.txt', 'run.sh', 'iniciar.sh', 'server.jar'].includes(a.caminho) &&
-          !['shaderpacks/', 'resourcepacks/'].some((prefixo) => a.caminho.startsWith(prefixo))) {
-        candidatos.add(a);
-        mudou = true;
-      }
-    }
-  }
   const arquivosServidor = arquivos.filter((a) => candidatos.has(a));
   excluidos.push(...arquivos.filter((a) => !candidatos.has(a)).map((a) => a.caminho));
 
@@ -164,6 +205,10 @@ export async function prepararModpackPublicado(projetoId, versaoId, {
     for (const [origem, entrada] of entradas) {
       if (!origem.startsWith(prefixo) || origem.endsWith('/') || remover.has(origem)) continue;
       const destino = origem.slice(prefixo.length);
+      if (destino.startsWith('mods/') && !servidor.some((r) => r.caminho === origem)) {
+        excluidos.push(origem);
+        continue;
+      }
       if (!caminhoSeguro(destino, { paraUnzip: true }) || ![0, 8].includes(entrada.metodo)) throw new Error('O .mrpack contém override inválido.');
       if (['eula.txt', 'run.sh', 'iniciar.sh', 'server.jar'].includes(destino)) continue;
       if (['resourcepacks/', 'shaderpacks/', 'config/yosbr/'].some((p) => destino.startsWith(p)) ||
@@ -191,6 +236,10 @@ export async function prepararModpackPublicado(projetoId, versaoId, {
     ARQUIVOS: arquivosServidor.map((a) => `  ${aspas(`${a.caminho}|${a.sha1}|${a.url}`)}`).join('\n'),
     OVERRIDES: overrides.map((a) => `  ${aspas(`${a.origem}|${a.destino}`)}`).join('\n'),
     EXCLUIDOS: excluidos.map((a) => `  ${aspas(a)}`).join('\n'),
+    JAVA_MINIMO: String(verificacao.javaMinimo),
+    JAVA_PERMITIDOS: verificacao.javaPermitidos.join(' '),
+    VERIFICACAO: textoVerificacao(verificacao),
+    VERIFICADOR: criarVerificador(),
   };
   let script = await readFile(MOLDE, 'utf8');
   for (const [chave, valor] of Object.entries(valores)) script = script.split(`@@${chave}@@`).join(valor);
@@ -199,6 +248,6 @@ export async function prepararModpackPublicado(projetoId, versaoId, {
     removidosEmbutidos: [...remover].filter((caminho) => embutidos.has(caminho)),
     nomeArquivo: `instalar-servidor-${gerarSlug(nome)}.sh`,
     script: Buffer.from(script.replace(/\r\n/g, '\n'), 'utf8'),
-    resumo: { nome, mc, loader, loaderVersao, arquivos: arquivosServidor.length, excluidos: excluidos.length, overrides: overrides.length },
+    resumo: { nome, mc, loader, loaderVersao, arquivos: arquivosServidor.length, excluidos: excluidos.length, overrides: overrides.length, verificacao },
   };
 }

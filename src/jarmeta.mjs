@@ -11,6 +11,7 @@
 
 import { inflateRawSync } from 'node:zlib';
 import { USER_AGENT } from './http.mjs';
+import { buscarArquivoPublico } from './arquivo-publico.mjs';
 
 const CAMINHOS = [
   { nome: 'fabric.mod.json', tipo: 'fabric' },
@@ -19,23 +20,37 @@ const CAMINHOS = [
   { nome: 'META-INF/mods.toml', tipo: 'forge' },
 ];
 
-const RABO = 65536;
 const cache = new Map(); // url -> metadados (ou null quando não deu para ler)
 
-async function pedirPedaco(url, de, ate) {
-  const resposta = await fetch(url, {
+async function pedirPedaco(url, de, ate, transporte = fetch) {
+  const resposta = await transporte(url, {
     headers: { 'User-Agent': USER_AGENT, Range: `bytes=${de}-${ate}` },
     signal: AbortSignal.timeout(25000),
   });
   if (resposta.status !== 206 && resposta.status !== 200) {
     throw new Error(`Range recusado (HTTP ${resposta.status})`);
   }
-  return Buffer.from(await resposta.arrayBuffer());
+  // Alguns CDNs ignoram Range. Nesse caso os offsets continuam absolutos.
+  if (resposta.status === 200 && Number(resposta.headers.get('content-length')) > 64 * 1024 * 1024) {
+    await resposta.body?.cancel();
+    throw new Error('JAR sem suporte a Range e grande demais');
+  }
+  const partes = []; let total = 0;
+  for await (const parte of resposta.body) {
+    total += parte.length;
+    if (total > 64 * 1024 * 1024) throw new Error('Resposta JAR grande demais');
+    partes.push(parte);
+  }
+  const buf = Buffer.concat(partes);
+  if (resposta.status === 200) return buf.subarray(de, ate + 1);
+  const faixa = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(resposta.headers.get('content-range') ?? '');
+  if (!faixa || Number(faixa[1]) !== de || buf.length !== Number(faixa[2]) - de + 1) throw new Error('Range JAR inválido');
+  return buf;
 }
 
 function acharEocd(buf) {
   for (let i = buf.length - 22; i >= 0; i--) {
-    if (buf.readUInt32LE(i) === 0x06054b50) return i;
+    if (buf.readUInt32LE(i) === 0x06054b50 && i + 22 + buf.readUInt16LE(i + 20) === buf.length) return i;
   }
   return -1;
 }
@@ -53,7 +68,7 @@ function lerDiretorioCentral(cd, quantidade) {
     const comentarioLen = cd.readUInt16LE(p + 32);
     const deslocamentoLocal = cd.readUInt32LE(p + 42);
     const nome = cd.toString('utf8', p + 46, p + 46 + nomeLen);
-    entradas.set(nome, { metodo, tamanhoComprimido, deslocamentoLocal, nomeLen });
+    entradas.set(nome, { metodo, tamanhoComprimido, deslocamentoLocal, nomeLen, descomprimido: cd.readUInt32LE(p + 24) });
     p += 46 + nomeLen + extraLen + comentarioLen;
   }
   return entradas;
@@ -61,6 +76,7 @@ function lerDiretorioCentral(cd, quantidade) {
 
 /** Mesma extração, mas de um ZIP que já está inteiro na memória. */
 function extrairDeBuffer(buf, entrada) {
+  if (entrada.descomprimido > 32 * 1024 * 1024) throw new Error('Entrada JAR grande demais');
   const de = entrada.deslocamentoLocal;
   if (buf.readUInt32LE(de) !== 0x04034b50) throw new Error('cabeçalho local inválido');
   const nomeLen = buf.readUInt16LE(de + 26);
@@ -68,7 +84,7 @@ function extrairDeBuffer(buf, entrada) {
   const inicio = de + 30 + nomeLen + extraLen;
   const dados = buf.subarray(inicio, inicio + entrada.tamanhoComprimido);
   if (entrada.metodo === 0) return dados;
-  if (entrada.metodo === 8) return inflateRawSync(dados);
+  if (entrada.metodo === 8) return inflateRawSync(dados, { maxOutputLength: 32 * 1024 * 1024 });
   throw new Error(`compressão ${entrada.metodo} não suportada`);
 }
 
@@ -82,21 +98,18 @@ function abrirZipEmMemoria(buf) {
   return lerDiretorioCentral(buf.subarray(deslocamentoCd, deslocamentoCd + tamanhoCd), quantidade);
 }
 
-async function extrairArquivo(url, entrada) {
-  // O cabeçalho local repete o nome e pode ter um campo extra de tamanho
-  // diferente do índice central, então pegamos uma folga e lemos os tamanhos reais.
-  const folga = 30 + entrada.nomeLen + 1024;
+async function extrairArquivo(url, entrada, transporte) {
+  if (entrada.descomprimido > 32 * 1024 * 1024 || entrada.tamanhoComprimido > 32 * 1024 * 1024) throw new Error('Entrada JAR grande demais');
   const de = entrada.deslocamentoLocal;
-  const bruto = await pedirPedaco(url, de, de + folga + entrada.tamanhoComprimido);
-
+  const bruto = await pedirPedaco(url, de, de + 29, transporte);
   if (bruto.readUInt32LE(0) !== 0x04034b50) throw new Error('cabeçalho local inválido');
   const nomeLen = bruto.readUInt16LE(26);
   const extraLen = bruto.readUInt16LE(28);
-  const inicio = 30 + nomeLen + extraLen;
-  const dados = bruto.subarray(inicio, inicio + entrada.tamanhoComprimido);
+  const inicio = de + 30 + nomeLen + extraLen;
+  const dados = await pedirPedaco(url, inicio, inicio + entrada.tamanhoComprimido - 1, transporte);
 
   if (entrada.metodo === 0) return dados;
-  if (entrada.metodo === 8) return inflateRawSync(dados);
+  if (entrada.metodo === 8) return inflateRawSync(dados, { maxOutputLength: 32 * 1024 * 1024 });
   throw new Error(`compressão ${entrada.metodo} não suportada`);
 }
 
@@ -163,6 +176,8 @@ function lerFabric(texto) {
   const provides = Array.isArray(j.provides) ? j.provides : [];
   return {
     dialeto: 'fabric',
+    tipo: 'fabric',
+    ambiente: j.environment ?? '*',
     modId: j.id ?? null,
     versao: typeof j.version === 'string' ? j.version : null,
     fornece: provides,
@@ -177,6 +192,22 @@ function lerFabric(texto) {
   };
 }
 
+function lerQuilt(texto) {
+  const j = jsonTolerante(texto);
+  const q = j.quilt_loader ?? {};
+  const exigencias = (lista) => Object.fromEntries((lista ?? []).filter((d) => d && !Array.isArray(d) && d.id && !d.optional && !d.unless && (d.versions == null || typeof d.versions === 'string' || Array.isArray(d.versions)))
+    .map((d) => [d.id, d.versions ?? '*']));
+  return {
+    tipo: 'quilt', dialeto: 'fabric', modId: q.id ?? null, versao: q.version ?? null,
+    ambiente: j.minecraft?.environment ?? '*',
+    fornece: (q.provides ?? []).map((p) => typeof p === 'string' ? p : p.id).filter(Boolean),
+    versaoDe: Object.fromEntries((q.provides ?? []).filter((p) => p.id).map((p) => [p.id, p.version ?? q.version])),
+    aninhados: (q.jars ?? []).map((p) => typeof p === 'string' ? p : p.file).filter(Boolean),
+    depende: exigencias(q.depends), quebra: exigencias(q.breaks), recomenda: {}, conflita: {},
+    incompleto: (q.depends ?? []).some((d) => Array.isArray(d) || d?.unless || (d?.versions && typeof d.versions === 'object' && !Array.isArray(d.versions))),
+  };
+}
+
 // -------------------------------------------------------- Forge / NeoForge
 
 /**
@@ -186,8 +217,10 @@ function lerFabric(texto) {
 function lerModsToml(texto) {
   const mods = [];
   const dependencias = [];
+  const features = [];
   let secao = null;
   let atual = null;
+  let multiline = null;
 
   const desaspar = (v) => {
     const t = v.trim();
@@ -197,6 +230,10 @@ function lerModsToml(texto) {
   };
 
   for (const linhaBruta of texto.split(/\r?\n/)) {
+    if (multiline) {
+      if (linhaBruta.includes(multiline)) multiline = null;
+      continue;
+    }
     const linha = linhaBruta.replace(/(^|\s)#.*$/, '').trim();
     if (!linha) continue;
 
@@ -211,6 +248,9 @@ function lerModsToml(texto) {
         secao = 'dependencias';
         atual.__de = caminho.slice('dependencies.'.length).replace(/^["']|["']$/g, '');
         dependencias.push(atual);
+      } else if (caminho.startsWith('features.')) {
+        secao = 'features';
+        features.push(atual);
       } else {
         secao = null;
         atual = null;
@@ -222,151 +262,166 @@ function lerModsToml(texto) {
     if (par && atual && secao) {
       const [, chave, valor] = par;
       const t = valor.trim();
+      const delimitador = t.startsWith('"""') ? '"""' : t.startsWith("'''") ? "'''" : null;
+      if (delimitador && !t.slice(3).includes(delimitador)) { multiline = delimitador; continue; }
       atual[chave] = t === 'true' ? true : t === 'false' ? false : desaspar(t);
     }
   }
-  return { mods, dependencias };
+  return { mods, dependencias, features };
 }
 
 function lerForge(texto, tipo) {
-  const { mods, dependencias } = lerModsToml(texto);
+  const { mods, dependencias, features } = lerModsToml(texto);
   const principal = mods[0] ?? {};
   const modId = principal.modId ?? null;
 
   const depende = {};
+  const dependeServidor = {};
+  const dependeCliente = {};
   const quebra = {};
+  const quebraServidor = {};
+  const quebraCliente = {};
   for (const d of dependencias) {
-    if (d.__de && modId && d.__de !== modId) continue; // dependência de outro mod do mesmo jar
     const alvo = d.modId;
     if (!alvo) continue;
     const faixa = d.versionRange ?? '*';
     const obrigatoria = d.type ? d.type === 'required' : d.mandatory !== false;
-    if (d.type === 'incompatible') quebra[alvo] = faixa;
-    else if (obrigatoria) depende[alvo] = faixa;
+    const paraCliente = d.side !== 'SERVER';
+    const paraServidor = d.side !== 'CLIENT';
+    if (d.type === 'incompatible') {
+      quebra[alvo] = faixa;
+      if (paraCliente) quebraCliente[alvo] = faixa;
+      if (paraServidor) quebraServidor[alvo] = faixa;
+    } else if (obrigatoria) {
+      depende[alvo] = faixa;
+      if (paraCliente) dependeCliente[alvo] = faixa;
+      if (paraServidor) dependeServidor[alvo] = faixa;
+    }
   }
 
   return {
     dialeto: 'maven',
     tipo,
+    ambiente: 'unknown',
     modId,
     versao: typeof principal.version === 'string' ? principal.version : null,
-    fornece: [],
+    fornece: mods.slice(1).map((m) => m.modId).filter(Boolean),
+    idsPrincipais: mods.map((m) => m.modId).filter(Boolean),
+    versaoDe: Object.fromEntries(mods.map((m) => [m.modId, m.version])),
     depende,
+    dependeServidor, dependeCliente, quebraServidor, quebraCliente,
+    regrasDependencia: dependencias.filter((d) => d.modId && !['incompatible', 'discouraged'].includes(d.type)).map((d) => ({
+      id: d.modId, faixa: d.versionRange ?? '*', lado: d.side ?? 'BOTH',
+      obrigatoria: d.type ? d.type === 'required' : d.mandatory !== false,
+    })),
+    exigenciasJava: features.map((f) => f.javaVersion).filter(Boolean),
     recomenda: {},
     quebra,
     conflita: {},
   };
 }
 
-/**
- * Abre os jars embutidos e devolve os modids que eles trazem, cada um com a
- * SUA versão.
- *
- * A versão importa: o Fabric API 0.116 carrega dentro de si o
- * fabric-rendering-fluids-v1 na versão 3.x, e mods pedem faixas do submódulo,
- * não do pacote. Tratar o conteúdo embutido como se tivesse a versão do jar pai
- * faz a comparação comparar coisas diferentes.
- */
-async function lerAninhados(url, entradas, caminhos) {
-  const encontrados = [];
-  const lote = caminhos.slice(0, 24); // bibliotecas grandes embutem muita coisa
-  await Promise.all(
-    lote.map(async (caminho) => {
-      const entrada = entradas.get(caminho);
-      if (!entrada) return;
-      try {
-        const jarInterno = await extrairArquivo(url, entrada);
-        const internas = abrirZipEmMemoria(jarInterno);
-        const fmj = internas.get('fabric.mod.json') ?? internas.get('quilt.mod.json');
-        if (!fmj) return;
-        const meta = lerFabric(extrairDeBuffer(jarInterno, fmj).toString('utf8'));
-        if (meta.modId) encontrados.push({ id: meta.modId, versao: meta.versao });
-        for (const id of meta.fornece ?? []) encontrados.push({ id, versao: meta.versao });
-      } catch {
-        // um aninhado ilegível não invalida o resto
-      }
-    }),
-  );
-  return encontrados;
-}
 
-// ------------------------------------------------------------------ público
-
-/**
- * Metadados de um mod a partir da URL do jar.
- * Devolve null quando não dá para ler — nunca lança, porque um jar ilegível
- * não pode derrubar a montagem do pack inteiro.
- */
-export async function lerMetadados(url, tamanhoConhecido = 0) {
-  if (!url) return null;
-  if (cache.has(url)) return cache.get(url);
-
-  try {
-    let tamanho = tamanhoConhecido;
-    if (!tamanho) {
-      const head = await fetch(url, { method: 'HEAD', headers: { 'User-Agent': USER_AGENT } });
-      tamanho = Number(head.headers.get('content-length')) || 0;
-      if (!tamanho) throw new Error('tamanho desconhecido');
-    }
-
-    const inicioRabo = Math.max(0, tamanho - RABO);
-    const rabo = await pedirPedaco(url, inicioRabo, tamanho - 1);
-
-    const eocd = acharEocd(rabo);
-    if (eocd < 0) throw new Error('fim do índice não encontrado');
-
-    const quantidade = rabo.readUInt16LE(eocd + 10);
-    const tamanhoCd = rabo.readUInt32LE(eocd + 12);
-    const deslocamentoCd = rabo.readUInt32LE(eocd + 16);
-    if (deslocamentoCd === 0xffffffff) throw new Error('ZIP64 não suportado');
-
-    // Jar grande: o índice começa antes do que já baixamos, então pedimos só ele.
-    const cd =
-      deslocamentoCd >= inicioRabo
-        ? rabo.subarray(deslocamentoCd - inicioRabo, deslocamentoCd - inicioRabo + tamanhoCd)
-        : await pedirPedaco(url, deslocamentoCd, deslocamentoCd + tamanhoCd - 1);
-
-    const entradas = lerDiretorioCentral(cd, quantidade);
-
-    for (const { nome, tipo } of CAMINHOS) {
-      const entrada = entradas.get(nome);
-      if (!entrada) continue;
-      const texto = (await extrairArquivo(url, entrada)).toString('utf8');
-      const meta =
-        tipo === 'fabric' || tipo === 'quilt' ? lerFabric(texto) : lerForge(texto, tipo);
-
-      // Mods Fabric costumam embutir as próprias bibliotecas. Sem abrir esses
-      // jars aninhados, acusaríamos como faltando algo que já vem junto.
-      //
-      // `versaoDe` guarda a versão de cada modid que este jar entrega: a dele
-      // próprio, a dos que ele declara fornecer, e a de cada jar embutido.
-      meta.versaoDe = Object.create(null);
-      if (meta.modId) meta.versaoDe[meta.modId] = meta.versao;
-      for (const id of meta.fornece) meta.versaoDe[id] = meta.versao;
-
-      if (meta.aninhados?.length) {
-        const dentro = await lerAninhados(url, entradas, meta.aninhados);
-        for (const { id, versao } of dentro) {
-          if (!meta.fornece.includes(id)) meta.fornece.push(id);
-          meta.versaoDe[id] = versao ?? meta.versao;
-        }
-      }
-
-      cache.set(url, meta);
-      return meta;
-    }
-
-    cache.set(url, null);
-    return null;
-  } catch {
-    // Silencioso de propósito: sem metadados o resolver cai no comportamento
-    // anterior, que funciona, só é menos preciso.
-    cache.set(url, null);
-    return null;
+/** Seleciona o descritor do loader que vai carregar o arquivo. */
+async function montarMeta(entradas, extrair, loader, profundidade = 0, orcamento = { bytes: 0, jars: 0 }) {
+  const aceitos = loader === 'quilt' ? ['quilt', 'fabric'] : loader === 'neoforge' ? ['neoforge', 'forge'] : loader ? [loader] : CAMINHOS.map((c) => c.tipo);
+  const caminho = aceitos.flatMap((tipo) => CAMINHOS.filter((c) => c.tipo === tipo)).find((c) => entradas.has(c.nome));
+  if (!caminho) return null;
+  const texto = (await extrair(entradas.get(caminho.nome))).toString('utf8');
+  const meta = caminho.tipo === 'fabric' ? lerFabric(texto) : caminho.tipo === 'quilt' ? lerQuilt(texto) : lerForge(texto, loader === 'neoforge' ? 'neoforge' : caminho.tipo);
+  if (!meta.modId) return null;
+  meta.idsPrincipais ??= [meta.modId];
+  meta.versaoDe ??= {};
+  if (meta.versao?.includes('${')) {
+    const manifest = entradas.get('META-INF/MANIFEST.MF');
+    const versao = manifest && (await extrair(manifest)).toString('utf8').match(/^Implementation-Version:\s*(.+)$/m)?.[1]?.trim();
+    meta.versao = versao || null;
   }
+  meta.versaoDe[meta.modId] = meta.versao;
+  for (const id of meta.fornece) {
+    if (meta.versaoDe[id]?.includes?.('${')) meta.versaoDe[id] = meta.versao;
+    meta.versaoDe[id] ??= meta.versao;
+  }
+  // Jar-in-jar do Forge/NeoForge tambem fornece mod IDs.
+  const jarjar = entradas.get('META-INF/jarjar/metadata.json');
+  if (jarjar) {
+    try {
+      const j = JSON.parse((await extrair(jarjar)).toString('utf8'));
+      meta.aninhados = (j.jars ?? []).map((j) => j.path).filter(Boolean);
+    } catch { meta.incompleto = true; }
+  }
+  meta.embutidos = [];
+  meta.forneceDeclarados = [...meta.fornece];
+  for (const caminhoInterno of meta.aninhados ?? []) {
+    try {
+      const entrada = entradas.get(caminhoInterno);
+      if (!entrada || profundidade >= 4 || ++orcamento.jars > 256) throw new Error('Limite de jars aninhados');
+      orcamento.bytes += entrada.descomprimido;
+      if (orcamento.bytes > 96 * 1024 * 1024) throw new Error('Limite de leitura aninhada');
+      const buf = await extrair(entrada);
+      const dentro = await montarMeta(abrirZipEmMemoria(buf), (e) => extrairDeBuffer(buf, e), loader, profundidade + 1, orcamento);
+      if (!dentro) continue; // biblioteca Java comum, sem descriptor de mod
+      meta.embutidos.push(dentro);
+      meta.incompleto ||= dentro.incompleto;
+      for (const id of [dentro.modId, ...dentro.fornece]) {
+        if (!meta.fornece.includes(id)) meta.fornece.push(id);
+        meta.versaoDe[id] = dentro.versaoDe[id] ?? dentro.versao;
+      }
+    } catch { meta.incompleto = true; }
+  }
+  return meta;
 }
 
-/** Ignoramos exigências que o próprio ambiente satisfaz. */
+export async function lerMetadadosBuffer(buf, loader = null) {
+  try { return await montarMeta(abrirZipEmMemoria(buf), (e) => extrairDeBuffer(buf, e), loader); }
+  catch { return null; }
+}
+
+// Compartilhamos promessas e limitamos o numero de jars remotos simultaneos.
+let ativos = 0;
+const espera = [];
+async function limitado(fn) {
+  if (ativos >= 8) await new Promise((ok) => espera.push(ok));
+  else ativos++;
+  try { return await fn(); }
+  finally { const proximo = espera.shift(); if (proximo) proximo(); else ativos--; }
+}
+
+export async function lerMetadados(url, tamanhoConhecido = 0, loader = null, { publico = false } = {}) {
+  if (!url) return null;
+  const transporte = publico ? buscarArquivoPublico : fetch;
+  const chave = `${publico}:${loader ?? '*'}:${url}`;
+  if (cache.has(chave)) return cache.get(chave);
+  const pedido = limitado(async () => {
+    try {
+      let tamanho = tamanhoConhecido;
+      if (!tamanho) {
+        const head = await transporte(url, { method: 'HEAD', headers: { 'User-Agent': USER_AGENT }, signal: AbortSignal.timeout(25000) });
+        tamanho = Number(head.headers.get('content-length')) || 0;
+        if (!tamanho) throw new Error('tamanho desconhecido');
+      }
+      const inicioRabo = Math.max(0, tamanho - 65557);
+      const rabo = await pedirPedaco(url, inicioRabo, tamanho - 1, transporte);
+      const eocd = acharEocd(rabo);
+      if (eocd < 0) throw new Error('ZIP invalido');
+      const quantidade = rabo.readUInt16LE(eocd + 10);
+      const tamanhoCd = rabo.readUInt32LE(eocd + 12);
+      const deslocamentoCd = rabo.readUInt32LE(eocd + 16);
+      if (quantidade === 0xffff || tamanhoCd > 8 * 1024 * 1024 || deslocamentoCd === 0xffffffff) throw new Error('ZIP64 ou indice grande demais');
+      const cd = deslocamentoCd >= inicioRabo
+        ? rabo.subarray(deslocamentoCd - inicioRabo, deslocamentoCd - inicioRabo + tamanhoCd)
+        : await pedirPedaco(url, deslocamentoCd, deslocamentoCd + tamanhoCd - 1, transporte);
+      return await montarMeta(lerDiretorioCentral(cd, quantidade), (e) => extrairArquivo(url, e, transporte), loader);
+    } catch { return null; }
+  });
+  cache.set(chave, pedido);
+  const meta = await pedido;
+  // Falhas de rede podem ser temporarias: permita tentar de novo.
+  if (!meta) cache.delete(chave);
+  if (cache.size > 2500) cache.delete(cache.keys().next().value);
+  return meta;
+}
+
 export const MODS_DO_AMBIENTE = new Set([
   'minecraft', 'java', 'fabricloader', 'fabric-loader', 'quilt_loader', 'quilt_base',
   'forge', 'neoforge', 'mcp', 'fml',

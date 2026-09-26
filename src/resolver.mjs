@@ -6,6 +6,7 @@ import * as curseforge from './curseforge.mjs';
 import { checarCandidato } from './conflitos.mjs';
 import { ajustar } from './compatibilidade.mjs';
 import { lerMetadados } from './jarmeta.mjs';
+import { mesmoMod } from '../web/compartilhado/conflitos.mjs';
 
 const PROVIDERS = { modrinth, curseforge };
 
@@ -69,15 +70,16 @@ function agruparPedidos(pedidos) {
  * se o modid bate de verdade — senão acabaríamos instalando um mod homônimo.
  */
 async function acharPorModId(modid, alvo) {
-  const confere = async (projetoId) => {
-    const versoes = await modrinth.versoes(projetoId, alvo).catch(() => []);
+  const confere = async (projetoId, fonte = 'modrinth') => {
+    const provider = PROVIDERS[fonte];
+    const versoes = await provider.versoes(projetoId, alvo).catch(() => []);
     const versao = melhorVersao(versoes, alvo);
     if (!versao?.arquivo?.url) return null;
-    const meta = await lerMetadados(versao.arquivo.url, versao.arquivo.tamanho);
+    const meta = await lerMetadados(versao.arquivo.url, versao.arquivo.tamanho, alvo.loader);
     const bate = meta?.modId === modid || (meta?.fornece ?? []).includes(modid);
     if (!bate) return null;
-    const projeto = await modrinth.projeto(projetoId).catch(() => null);
-    return montarRegistro(projeto, versao, meta);
+    const projeto = await provider.projeto(projetoId).catch(() => null);
+    return montarRegistro(projeto, versao, meta, fonte);
   };
 
   const tentativas = [modid, modid.replace(/_/g, '-'), modid.replace(/-/g, '_')];
@@ -105,20 +107,27 @@ async function acharPorModId(modid, alvo) {
   } catch {
     // sem resultado utilizável
   }
+  if (await curseforge.temChave()) {
+    const resultado = await curseforge.buscar({ consulta: modid.replace(/[_-]/g, ' '), loader: alvo.loader, mc: alvo.mc, limite: 5 }).catch(() => ({ itens: [] }));
+    for (const item of resultado.itens) {
+      const achado = await confere(item.id, 'curseforge');
+      if (achado) return achado;
+    }
+  }
   return null;
 }
 
-function montarRegistro(projeto, versao, meta) {
+function montarRegistro(projeto, versao, meta, fonte = 'modrinth') {
   return {
-    chave: chaveDe('modrinth', versao.projetoId),
-    fonte: 'modrinth',
+    chave: chaveDe(fonte, versao.projetoId),
+    fonte,
     projetoId: versao.projetoId,
     versaoId: versao.id,
     versaoNumero: versao.numero,
     canal: versao.canal,
     arquivo: versao.arquivo,
-    distribuicaoLiberada: true,
-    paginaDoArquivo: null,
+    distribuicaoLiberada: versao.distribuicaoLiberada !== false && Boolean(versao.arquivo?.url),
+    paginaDoArquivo: versao.paginaDoArquivo ?? null,
     origem: 'dependencia',
     exigidoPor: [],
     fixado: false,
@@ -143,6 +152,8 @@ async function obterVersao(fonte, projetoId, versaoId, alvo) {
     const v = fonte === 'modrinth'
       ? await p.versaoPorId(versaoId)
       : await p.versaoPorId(projetoId, versaoId);
+    if (String(v.projetoId) !== String(projetoId)) throw new Error('Versão não pertence ao projeto escolhido.');
+    if (!melhorVersao([v], alvo)) throw new Error('Versão fixada não é compatível com o Minecraft e loader escolhidos.');
     return v;
   }
   const lista = await p.versoes(projetoId, alvo);
@@ -258,12 +269,14 @@ async function resolverRecursos(pedidos, alvo) {
 /**
  * @param {{loader:string, mc:string, itens:Array<{fonte:string,projetoId:string,versaoId?:string,tipo?:string}>}} entrada
  */
-export async function resolver({ loader, mc, itens }) {
-  const alvo = { loader, mc };
+export async function resolver({ loader, mc, loaderVersao = null, itens, contexto = [] }) {
+  const alvo = { loader, mc, loaderVersao };
   const resolvidos = new Map(); // chave canônica -> registro
+  for (const r of contexto) resolvidos.set(r.chave, { ...r, origem: 'original', fixado: true, exigidoPor: [] });
   const apelidos = new Map(); // chave pedida (slug) -> chave canônica
   const faltando = [];
   const erros = [];
+  const avisosCatalogo = [];
 
   // Shaders seguem outro caminho: não têm dependências nem fabric.mod.json.
   const pedidosDeShader = itens.filter((i) => i.tipo === 'shader');
@@ -328,6 +341,10 @@ export async function resolver({ loader, mc, itens }) {
 
         const versao = await obterVersao(pedido.fonte, pedido.projetoId, pedido.versaoId, alvo);
         if (!versao) {
+          if (pedido.origem === 'dependencia') {
+            avisosCatalogo.push(`Dependência cadastrada ${pedido.fonte}:${pedido.projetoId} sem versão na loja; conferindo os arquivos do pack.`);
+            return null;
+          }
           faltando.push({
             fonte: pedido.fonte,
             projetoId: pedido.projetoId,
@@ -391,6 +408,10 @@ export async function resolver({ loader, mc, itens }) {
     for (let i = 0; i < resultados.length; i++) {
       const r = resultados[i];
       if (r.status === 'rejected') {
+        if (rodada[i].origem === 'dependencia') {
+          avisosCatalogo.push(`Cadastro de dependência ${rodada[i].fonte}:${rodada[i].projetoId} indisponível; conferindo as declarações dos JARs.`);
+          continue;
+        }
         erros.push({
           fonte: rodada[i].fonte,
           projetoId: rodada[i].projetoId,
@@ -427,6 +448,7 @@ export async function resolver({ loader, mc, itens }) {
   );
 
   const enriquecer = (registro) => {
+    if (registro.origem === 'original') return registro;
     const meta = metadados.get(registro.chave ?? chaveDe(registro.fonte, registro.projetoId));
     return {
       ...registro,
@@ -452,20 +474,36 @@ export async function resolver({ loader, mc, itens }) {
       .filter(Boolean),
   }));
 
+  await Promise.all(arquivos.map(async (r) => {
+    if (r.meta === undefined) r.meta = await lerMetadados(r.arquivo?.url, r.arquivo?.tamanho, loader);
+  }));
+  // Uma dependencia de outra loja pode ser o mesmo mod ja instalado. Reutiliza
+  // o arquivo original/escolhido; duas escolhas explicitas continuam bloqueadas.
+  const ordenados = [...arquivos].sort((a, b) => ({ original: 0, escolhido: 1, dependencia: 2 }[a.origem] - { original: 0, escolhido: 1, dependencia: 2 }[b.origem]));
+  const semDuplicatasAutomaticas = [];
+  for (const r of ordenados) {
+    const presente = semDuplicatasAutomaticas.find((a) => mesmoMod(r, a));
+    if (presente && r.origem === 'dependencia') {
+      presente.exigidoPor = [...new Set([...presente.exigidoPor, ...r.exigidoPor])];
+    } else semDuplicatasAutomaticas.push(r);
+  }
+
   // Até aqui o pack é "a versão mais nova de cada mod", que é exatamente o que
   // o Fabric costuma recusar. Agora lemos as exigências de dentro dos jars e
   // mexemos no pack até ele fechar.
   const ajuste = await ajustar({
-    registros: arquivos,
+    registros: semDuplicatasAutomaticas,
+    alvo,
     listarVersoes: (fonte, projetoId) =>
-      PROVIDERS[fonte].versoes(projetoId, alvo).catch(() => []),
+      PROVIDERS[fonte]?.versoes(projetoId, alvo).catch(() => []) ?? [],
     acharPorModId: (modid) => acharPorModId(modid, alvo),
   });
 
   const finais = ajuste.registros;
 
   // Conflitos: compara cada mod contra os anteriores, uma vez por par.
-  const conflitos = [];
+  const conflitos = [...avisosCatalogo.map((motivo) => ({ severidade: 'aviso', grupo: 'catalogo-indisponivel', titulo: 'Cadastro indisponível na loja', motivo, envolvidos: [] })),
+    ...ajuste.verificacao.avisos.map((p) => ({ severidade: 'aviso', grupo: p.tipo, titulo: 'Verificação incompleta', motivo: p.texto, envolvidos: [{ chave: p.chave, nome: p.nome }] }))];
   for (let i = 0; i < finais.length; i++) {
     const candidato = { ...finais[i], id: finais[i].projetoId };
     const anteriores = finais.slice(0, i);
@@ -489,12 +527,19 @@ export async function resolver({ loader, mc, itens }) {
     conflitos.push({
       severidade: 'bloqueio',
       grupo: p.tipo,
-      titulo:
-        p.tipo === 'dependencia-nao-encontrada'
-          ? 'Dependência não encontrada'
-          : p.tipo === 'sem-versao-possivel'
-            ? 'Não existe versão que sirva'
-            : 'Incompatíveis segundo o autor',
+      titulo: ({
+        'dependencia-ausente': 'Dependência ausente nos arquivos',
+        'dependencia-nao-encontrada': 'Dependência não encontrada',
+        'duplicado': 'O mesmo mod está duas vezes no pack',
+        'arquivo-duplicado': 'Dois mods usam o mesmo arquivo',
+        'versao-incompativel': 'Faixas de versão incompatíveis',
+        'sem-versao-possivel': 'Não existe versão que sirva',
+        'ambiente-incompativel': 'Minecraft ou loader incompatível',
+        'loader-incorreto': 'Mod para outro loader',
+        'lado-incorreto': 'Mod para outro ambiente',
+        'java-incompativel': 'Exigências de Java incompatíveis',
+        'nao-convergiu': 'Ajuste incompleto',
+      })[p.tipo] ?? 'Incompatíveis segundo o autor',
       motivo: p.texto,
       envolvidos: [
         { chave: p.chave ?? null, nome: p.nome ?? p.modid },
@@ -520,17 +565,18 @@ export async function resolver({ loader, mc, itens }) {
 
   const manuais = finais.filter((a) => !a.distribuicaoLiberada);
 
-  // `meta` é um objeto grande e só interessa aqui dentro; não vai para a rede.
-  // Levamos só o que a exportação precisa: o modid, a versão que o jar declara
-  // e de quem ele depende — este último para nenhum filtro derrubar um mod do
-  // qual outro depende.
-  const mods = finais.map(({ meta, ...resto }) => ({
+  // A exportação do servidor reutiliza os descritores lidos pelo resolver.
+  // A API sempre resolve novamente a seleção; não confia em metadados enviados
+  // pelo navegador.
+  const mods = finais.filter((r) => r.origem !== 'original').map(({ meta, ...resto }) => ({
     ...resto,
     tipo: 'mod',
     modId: meta?.modId ?? null,
     versaoDeclarada: meta?.versao ?? null,
     fornece: meta?.fornece ?? [],
     dependeDe: Object.keys(meta?.depende ?? {}),
+    metadados: meta,
+    ambiente: meta?.ambiente ?? null,
   }));
 
   const shadersProntos = shaders.map(enriquecer).map((s) => ({
@@ -562,6 +608,7 @@ export async function resolver({ loader, mc, itens }) {
     manuais: manuais.map(({ meta, ...resto }) => resto),
     trocas: ajuste.trocas,
     adicionadosPorMetadados: ajuste.adicionados,
+    verificacao: ajuste.verificacao,
     resumo: {
       total: arquivosFinais.length,
       mods: mods.length,
