@@ -252,6 +252,14 @@ dela. Todo visitante usa a cota da sua chave.
 - Os instaladores baixam até seis arquivos em paralelo, verificam SHA-1,
   reutilizam downloads válidos e removem JARs antigos gerenciados por eles.
   Falhas interrompem a instalação. O loader é reinstalado quando a versão muda.
+- Escolhas aparecem no painel imediatamente enquanto a conferência continua.
+  Avisos e mods ficam na mesma área de rolagem; cada mod em conflito mostra o
+  motivo também na própria linha. Falhas de rede têm botão para tentar novamente.
+- JARs pequenos e bibliotecas com muitos JARs internos usam uma transferência
+  completa limitada em tamanho, evitando dezenas de requisições sequenciais.
+  Addons sem versão fixada podem voltar a uma versão compatível com o loader
+  escolhido, incluindo as dependências cadastradas nessa versão. Versões
+  explicitamente fixadas e mods originais continuam fixados.
 
 Depois de instalar, com o servidor principal parado e o EULA aceito por você,
 rode na pasta do servidor:
@@ -269,6 +277,34 @@ O limite padrão é 300 segundos; para packs maiores:
 ```sh
 MPF_TEMPO_TESTE=600 bash verificar-servidor.sh
 ```
+
+Se o teste falhar, ele mostra **causas prováveis e orientações**, com trechos do
+log, e salva `verificacao-boot-*-diagnostico.txt`. Reconhece erros comuns de Java,
+dependências, duplicatas, classes de cliente, configs/dados inválidos, memória,
+porta, disco, mixins e inicializador. Quando não encontra uma causa específica,
+informa que não há evidência para recomendar um mod a remover. Não exclui mods
+nem altera configs automaticamente. Para analisar uma falha durante o uso normal:
+
+```sh
+bash diagnosticar-servidor.sh logs/latest.log
+# Ou informe o caminho de um crash-report:
+bash diagnosticar-servidor.sh crash-reports/crash-AAAA-MM-DD.txt
+```
+
+### Configurações do pack
+
+Packs publicados mantêm as configs e outros overrides do autor. O override de
+servidor prevalece sobre o comum para o mesmo caminho. Antes de substituir um
+arquivo existente com conteúdo diferente, o instalador salva a cópia anterior
+em `.modpackforge-backups/<data-e-identificador>/`, mantendo o caminho do arquivo.
+Arquivos iguais não geram backup; extração malsucedida não substitui aquele arquivo.
+
+Mods adicionados geralmente geram configs padrão quando iniciam. O teste de boot
+pode produzir esses arquivos para o lado servidor, mas isso depende de cada mod;
+configs de cliente precisam do jogo. Esses padrões não reproduzem receitas,
+balanceamento ou scripts de um autor. Uma config de outra versão pode ser
+incompatível mesmo quando sua sintaxe está correta. A análise do log orienta a
+restauração/correção do arquivo identificado; não inventa valores para todos os mods.
 
 `verificacao-pack.txt` guarda a auditoria feita antes da geração. Para conferir
 os JARs locais, incluindo mods que não estão em lojas:

@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, existsSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, existsSync, rmSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { criarVerificador } from '../src/verificador-servidor.mjs';
+import { criarVerificador, criarDiagnostico } from '../src/verificador-servidor.mjs';
+import { montarZip } from '../src/zip.mjs';
 
 const bash = process.env.BASH_TEST_BIN ?? (process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash');
 const temBash = spawnSync(bash, ['--version']).status === 0;
@@ -19,6 +20,83 @@ function pasta(t) {
     rmSync(p, { recursive: true, force: true });
   });
   return p;
+}
+
+const diagnosticos = [
+  ['java', 'java.lang.UnsupportedClassVersionError: example/Main class file version 65.0', /Java incompativel/, /verificacao-pack.txt/],
+  ['duplicado', 'DuplicateModsFoundException: Duplicate mods found\nDuplicate mod id lithium: lithium-a.jar, lithium-b.jar', /Duas copias/, /lithium-a.jar/],
+  ['dependencia', "Incompatible mods found!\n - Mod 'Demo' (demo) 1.0 requires version 2.0 or later of fabric-api, which is missing!", /Dependencia ausente/, /fabric-api/],
+  ['cliente', 'Caused by: java.lang.NoClassDefFoundError: net/minecraft/client/MinecraftClient', /Codigo exclusivo do cliente/, /sozinha nao identifica/],
+  ['config', 'Failed to load config config/demo.toml\nCaused by: com.electronwill.nightconfig.core.io.ParsingException: line 9', /Configuracao ou dados/, /config\/demo.toml/],
+  ['memoria', 'java.lang.OutOfMemoryError: Java heap space', /Memoria insuficiente/, /RAM livre/],
+  ['mixin', 'org.spongepowered.asm.mixin.throwables.MixinApplyError: demo.mixins.json failed', /possivel incompatibilidade de codigo/, /nao prova qual mod retirar/],
+  ['porta', 'java.net.BindException: Address already in use', /Porta ocupada/, /server.properties/],
+  ['disco', 'java.io.IOException: No space left on device', /Disco cheio/, /espaco livre/],
+  ['launcher', 'Error: Unable to access jarfile fabric-server-launch.jar', /Inicializador ou JAR/, /Rode novamente/],
+  ['desconhecido', 'Caused by: example.CustomRuntimeException: boom', /Nao identifiquei uma causa especifica/, /Nao ha evidencia suficiente/],
+];
+for (const [nome, log, causa, acao] of diagnosticos) {
+  test(`diagnostico de log: ${nome}`, { skip: !temBash }, (t) => {
+    const raiz = pasta(t);
+    writeFileSync(path.join(raiz, 'diagnosticar.sh'), criarDiagnostico());
+    writeFileSync(path.join(raiz, 'crash.log'), log);
+    writeFileSync(path.join(raiz, 'nao-alterar.toml'), 'config do usuario');
+    const r = spawnSync(bash, [unix(path.join(raiz, 'diagnosticar.sh')), 'crash.log'], { cwd: raiz, encoding: 'utf8', timeout: 10000 });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, causa); assert.match(r.stdout, acao);
+    assert.equal(readFileSync(path.join(raiz, 'nao-alterar.toml'), 'utf8'), 'config do usuario');
+  });
+}
+
+test('diagnostico nao executa texto do log e diferencia SIGKILL de erro conhecido', { skip: !temBash }, (t) => {
+  const raiz = pasta(t);
+  writeFileSync(path.join(raiz, 'diagnosticar.sh'), criarDiagnostico());
+  writeFileSync(path.join(raiz, 'crash.log'), 'boom $(touch injetado) `touch injetado`\n\x1b[31mErro\x1b[0m');
+  const r = spawnSync(bash, [unix(path.join(raiz, 'diagnosticar.sh')), 'crash.log', '137'], { cwd: raiz, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr); assert.match(r.stdout, /codigo 137/);
+  assert.match(r.stdout, /codigo sozinho nao prova/);
+  assert.ok(!r.stdout.includes('\x1b')); assert.ok(!existsSync(path.join(raiz, 'injetado')));
+  const ausente = spawnSync(bash, [unix(path.join(raiz, 'diagnosticar.sh')), 'ausente.log'], { cwd: raiz, encoding: 'utf8' });
+  assert.equal(ausente.status, 2);
+});
+
+for (const corrompido of [false, true]) {
+  test(`overrides: ${corrompido ? 'extracao falha preserva config existente' : 'config aplicada com backup e reaplicacao sem backup desnecessario'}`, { skip: !temBash }, (t) => {
+    const raiz = pasta(t), servidor = path.join(raiz, 'servidor'), bin = path.join(raiz, 'bin');
+    mkdirSync(path.join(servidor, 'config'), { recursive: true }); mkdirSync(bin);
+    writeFileSync(path.join(servidor, 'config/demo.toml'), 'personalizado=true\n');
+    writeFileSync(path.join(servidor, '.modpackforge-loader'), 'fabric|1.21.1|0.16.14\n');
+    writeFileSync(path.join(servidor, 'fabric-server-launch.jar'), 'stub-loader');
+    writeFileSync(path.join(servidor, 'eula.txt'), 'eula=true\n');
+    const pack = corrompido ? Buffer.from('nao e zip') : montarZip([{ caminho: 'server-overrides/config/demo.toml', dados: 'do-autor=true\n' }]);
+    writeFileSync(path.join(raiz, 'pack.mrpack'), pack);
+    writeFileSync(path.join(bin, 'java'), '#!/usr/bin/env bash\necho \'openjdk version "21.0.7"\' >&2\n');
+    writeFileSync(path.join(bin, 'curl'), `#!/usr/bin/env bash\nwhile [ "$#" -gt 0 ]; do if [ "$1" = '-o' ]; then shift; destino="$1"; fi; shift; done\ncp ${aspas(unix(path.join(raiz, 'pack.mrpack')))} "$destino"\n`);
+    const valores = {
+      PACK_NOME: "'Teste'", PACK_SLUG: "'teste'", MC_VERSAO: "'1.21.1'", LOADER_NOME: "'fabric'", LOADER_VERSAO: "'0.16.14'",
+      LOADER_LANCADOR: "'fabric-server-launch.jar'", LOADER_URL: "''", LOADER_JAR: "''", LOADER_ARGS: '',
+      MEMORIA_MB: '4096', PORTA: '25565', JAVA_MINIMO: '21', JAVA_PERMITIDOS: '21', ARQUIVOS: '',
+      OVERRIDES: "  'server-overrides/config/demo.toml|config/demo.toml'", EXCLUIDOS: '',
+      PACK_URL: "'https://stub.test/pack.mrpack'", PACK_SHA1: aspas(createHash('sha1').update(pack).digest('hex')),
+      VERIFICACAO: 'Teste de regressao', VERIFICADOR: criarVerificador(), DIAGNOSTICO: criarDiagnostico(),
+    };
+    let script = readFileSync(new URL('../src/instalador-modpack.sh', import.meta.url), 'utf8');
+    for (const [k, v] of Object.entries(valores)) script = script.split(`@@${k}@@`).join(v);
+    assert.ok(!script.includes('@@')); writeFileSync(path.join(raiz, 'instalar.sh'), script);
+    writeFileSync(path.join(raiz, 'respostas'), `${unix(servidor)}\n`);
+    writeFileSync(path.join(raiz, 'rodar.sh'), `#!/usr/bin/env bash\nexport PATH=${aspas(unix(bin))}:"$PATH"\nchmod +x ${aspas(unix(bin))}/*\nexec bash ${aspas(unix(path.join(raiz, 'instalar.sh')))} < ${aspas(unix(path.join(raiz, 'respostas')))}\n`);
+    const rodar = () => spawnSync(bash, [unix(path.join(raiz, 'rodar.sh'))], { cwd: raiz, encoding: 'utf8', timeout: 10000 });
+    const r = rodar(); assert.equal(r.status, corrompido ? 1 : 0, r.stdout + r.stderr);
+    assert.equal(readFileSync(path.join(servidor, 'config/demo.toml'), 'utf8'), corrompido ? 'personalizado=true\n' : 'do-autor=true\n');
+    const backups = path.join(servidor, '.modpackforge-backups');
+    if (corrompido) assert.ok(!existsSync(backups));
+    else {
+      const copias = readdirSync(backups); assert.equal(copias.length, 1);
+      assert.equal(readFileSync(path.join(backups, copias[0], 'config/demo.toml'), 'utf8'), 'personalizado=true\n');
+      const segundo = rodar(); assert.equal(segundo.status, 0, segundo.stdout + segundo.stderr);
+      assert.equal(readdirSync(backups).length, 1);
+    }
+  });
 }
 
 for (const publicado of [false, true]) for (const cenario of ['valido', 'corrompido', 'java-incompativel']) {
@@ -45,7 +123,7 @@ for (const publicado of [false, true]) for (const cenario of ['valido', 'corromp
       MEMORIA_MB: '4096', PORTA: '25565', TOTAL_MODS: '1', JAVA_MINIMO: '21', JAVA_PERMITIDOS: '21', SOMENTE_CLIENTE: '',
       MODS: `  "A|a.jar|${sha}|https://stub.test/a.jar"`, ARQUIVOS: `  'mods/a.jar|${sha}|https://stub.test/a.jar'`,
       OVERRIDES: '', EXCLUIDOS: '', PACK_URL: "'https://nao-deve-baixar.test/pack.mrpack'", PACK_SHA1: "''",
-      VERIFICACAO: 'Teste de regressao', VERIFICADOR: criarVerificador(),
+      VERIFICACAO: 'Teste de regressao', VERIFICADOR: criarVerificador(), DIAGNOSTICO: criarDiagnostico(),
     };
     let script = readFileSync(new URL(`../src/instalador-${publicado ? 'modpack' : 'servidor'}.sh`, import.meta.url), 'utf8');
     for (const [chave, valor] of Object.entries(valores)) script = script.split(`@@${chave}@@`).join(valor);
@@ -62,6 +140,7 @@ for (const publicado of [false, true]) for (const cenario of ['valido', 'corromp
     if (javaIncompativel) assert.match(r.stdout + r.stderr, /Java incompativel/);
     if (!deveFalhar) {
       assert.ok(existsSync(path.join(servidor, 'verificar-servidor.sh')));
+      assert.ok(existsSync(path.join(servidor, 'diagnosticar-servidor.sh')));
       assert.ok(existsSync(path.join(servidor, 'verificacao-pack.txt')));
       const segundo = rodar(); assert.equal(segundo.status, 0, segundo.stdout + segundo.stderr);
       assert.equal(readFileSync(path.join(raiz, 'downloads'), 'utf8').trim().split('\n').length, 1);
@@ -73,13 +152,19 @@ for (const caso of ['sucesso', 'crash', 'timeout', 'sem-eula']) {
   test(`teste de boot: ${caso}`, { skip: !temSetsid && caso !== 'sem-eula' }, (t) => {
     const raiz = pasta(t);
     writeFileSync(path.join(raiz, 'verificar-servidor.sh'), criarVerificador());
+    writeFileSync(path.join(raiz, 'diagnosticar-servidor.sh'), criarDiagnostico());
     if (caso !== 'sem-eula') writeFileSync(path.join(raiz, 'eula.txt'), 'eula=true\n');
     const corpo = caso === 'sucesso' ? 'echo "Done (1.0s)! For help, type help"\nwhile read -r comando; do [ "$comando" != stop ] || exit 0; done' : caso === 'crash' ? 'echo "Missing dependency"\nexit 1' : 'sleep 60';
     writeFileSync(path.join(raiz, 'iniciar.sh'), `#!/usr/bin/env bash\n${corpo}\n`);
     const r = spawnSync(bash, [unix(path.join(raiz, 'verificar-servidor.sh'))], { cwd: raiz, env: { ...process.env, MPF_TEMPO_TESTE: '5' }, timeout: 45000, encoding: 'utf8' });
     assert.equal(r.status, caso === 'sucesso' ? 0 : 1, r.stdout + r.stderr);
     if (caso === 'sucesso') assert.match(r.stdout, /Boot confirmado/);
-    if (caso === 'crash') assert.match(r.stderr, /Missing dependency/);
+    if (caso === 'crash') {
+      assert.match(r.stderr, /Missing dependency/);
+      assert.match(r.stderr, /Dependencia ausente/);
+      assert.match(r.stderr, /Orientacoes salvas em/);
+    }
+    if (caso === 'timeout') assert.match(r.stderr, /Tempo esgotado sozinho nao confirma incompatibilidade/);
     if (caso === 'sem-eula') assert.ok(!existsSync(path.join(raiz, 'eula.txt')));
   });
 }

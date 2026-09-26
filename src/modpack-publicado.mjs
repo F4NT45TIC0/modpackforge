@@ -6,7 +6,7 @@ import { lerDiretorioZipRemoto, lerArquivoZipRemoto } from './ler-zip-remoto.mjs
 import { checarCandidato } from '../web/compartilhado/conflitos.mjs';
 import { lerMetadados, lerMetadadosBuffer } from './jarmeta.mjs';
 import { auditarPack, exigirServidorValido, selecionarModsServidor } from './auditoria.mjs';
-import { criarVerificador, textoVerificacao } from './verificador-servidor.mjs';
+import { criarVerificador, criarDiagnostico, textoVerificacao } from './verificador-servidor.mjs';
 
 const MOLDE = new URL('./instalador-modpack.sh', import.meta.url);
 const DEPENDENCIAS = [
@@ -199,7 +199,7 @@ export async function prepararModpackPublicado(projetoId, versaoId, {
   const arquivosServidor = arquivos.filter((a) => candidatos.has(a));
   excluidos.push(...arquivos.filter((a) => !candidatos.has(a)).map((a) => a.caminho));
 
-  const overrides = [];
+  const overridesPorDestino = new Map();
   let tamanhoOverrides = 0;
   for (const prefixo of ['overrides/', 'server-overrides/']) {
     for (const [origem, entrada] of entradas) {
@@ -217,10 +217,11 @@ export async function prepararModpackPublicado(projetoId, versaoId, {
       if (entrada.descomprimido > 1024 * 1024 * 1024 || tamanhoOverrides > 2 * 1024 * 1024 * 1024) {
         throw new Error('Os overrides deste .mrpack são grandes demais para o instalador.');
       }
-      overrides.push({ origem, destino });
+      overridesPorDestino.set(destino, { origem, destino });
     }
   }
 
+  const overrides = [...overridesPorDestino.values()];
   const instalador = await planoDeInstalacaoServidor(loader, mc, loaderVersao);
   const nome = String(nomeEditado || indice.name || projeto.nome).replace(/[\x00-\x1f]+/g, ' ').slice(0, 80);
   indiceEditado.name = nome;
@@ -240,6 +241,7 @@ export async function prepararModpackPublicado(projetoId, versaoId, {
     JAVA_PERMITIDOS: verificacao.javaPermitidos.join(' '),
     VERIFICACAO: textoVerificacao(verificacao),
     VERIFICADOR: criarVerificador(),
+    DIAGNOSTICO: criarDiagnostico(),
   };
   let script = await readFile(MOLDE, 'utf8');
   for (const [chave, valor] of Object.entries(valores)) script = script.split(`@@${chave}@@`).join(valor);

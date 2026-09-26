@@ -497,6 +497,13 @@ export async function resolver({ loader, mc, loaderVersao = null, itens, context
     listarVersoes: (fonte, projetoId) =>
       PROVIDERS[fonte]?.versoes(projetoId, alvo).catch(() => []) ?? [],
     acharPorModId: (modid) => acharPorModId(modid, alvo),
+    acharPorProjeto: async (pedido) => {
+      const versao = await obterVersao(pedido.fonte, String(pedido.projetoId), pedido.versaoId, alvo);
+      if (!versao?.arquivo?.url) return null;
+      const projeto = await PROVIDERS[pedido.fonte].projeto(versao.projetoId);
+      const meta = await lerMetadados(versao.arquivo.url, versao.arquivo.tamanho, loader);
+      return { ...montarRegistro(projeto, versao, meta, pedido.fonte), dependenciasCatalogo: versao.dependencias };
+    },
   });
 
   const finais = ajuste.registros;

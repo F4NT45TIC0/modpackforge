@@ -8,7 +8,7 @@
 import { readFile } from 'node:fs/promises';
 import { planoDeInstalacaoServidor, LOADERS } from './loaders.mjs';
 import { auditarPack, exigirServidorValido, somenteCliente, selecionarModsServidor } from './auditoria.mjs';
-import { criarVerificador, textoVerificacao } from './verificador-servidor.mjs';
+import { criarVerificador, criarDiagnostico, textoVerificacao } from './verificador-servidor.mjs';
 import { gerarSlug, nomeDeArquivoSeguro } from './exportar.mjs';
 
 const MOLDE_SH = new URL('./instalador-servidor.sh', import.meta.url);
@@ -76,6 +76,7 @@ export async function gerarInstaladorServidor(plano, opcoes) {
     JAVA_PERMITIDOS: verificacao.javaPermitidos.join(' '),
     VERIFICACAO: textoVerificacao(verificacao),
     VERIFICADOR: criarVerificador(),
+    DIAGNOSTICO: criarDiagnostico(),
   };
 
   let script = molde;

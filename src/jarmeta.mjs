@@ -1,13 +1,13 @@
-// Lê as exigências declaradas dentro do .jar sem baixar o .jar inteiro.
+// Lê as exigências declaradas dentro do .jar com transferências limitadas.
 //
 // Por que isso existe: a API da Modrinth lista dependências como "projeto X",
 // sem faixa de versão, e só quando o autor se lembrou de preencher. A verdade
 // mora no fabric.mod.json (ou mods.toml) dentro do jar, que traz tanto as
 // faixas quanto as dependências que ninguém cadastrou.
 //
-// Baixar 50 jars para ler um arquivinho de texto seria absurdo. Um ZIP guarda
-// o índice no fim, então dá para pedir por HTTP Range só o fim do arquivo,
-// achar a entrada e pedir só os bytes dela. Dá ~4% do jar.
+// Um ZIP guarda o índice no fim: arquivos grandes usam HTTP Range para ler
+// só o índice e os metadados. JARs pequenos ou com várias bibliotecas internas
+// são lidos de uma vez, dentro dos limites, para reduzir as idas à rede.
 
 import { inflateRawSync } from 'node:zlib';
 import { USER_AGENT } from './http.mjs';
@@ -400,6 +400,10 @@ export async function lerMetadados(url, tamanhoConhecido = 0, loader = null, { p
         tamanho = Number(head.headers.get('content-length')) || 0;
         if (!tamanho) throw new Error('tamanho desconhecido');
       }
+      // Para arquivos pequenos, uma leitura economiza tres viagens ao CDN.
+      if (tamanho <= 1024 * 1024) {
+        return await lerMetadadosBuffer(await pedirPedaco(url, 0, tamanho - 1, transporte), loader);
+      }
       const inicioRabo = Math.max(0, tamanho - 65557);
       const rabo = await pedirPedaco(url, inicioRabo, tamanho - 1, transporte);
       const eocd = acharEocd(rabo);
@@ -411,7 +415,13 @@ export async function lerMetadados(url, tamanhoConhecido = 0, loader = null, { p
       const cd = deslocamentoCd >= inicioRabo
         ? rabo.subarray(deslocamentoCd - inicioRabo, deslocamentoCd - inicioRabo + tamanhoCd)
         : await pedirPedaco(url, deslocamentoCd, deslocamentoCd + tamanhoCd - 1, transporte);
-      return await montarMeta(lerDiretorioCentral(cd, quantidade), (e) => extrairArquivo(url, e, transporte), loader);
+      const entradas = lerDiretorioCentral(cd, quantidade);
+      // Fabric API/Kotlin tem dezenas de JARs internos. Ler o arquivo inteiro
+      // uma vez evita centenas de chamadas Range, mantendo todos os descritores.
+      if (tamanho <= 16 * 1024 * 1024 && [...entradas.keys()].filter((p) => p.endsWith('.jar')).length > 3) {
+        return await lerMetadadosBuffer(await pedirPedaco(url, 0, tamanho - 1, transporte), loader);
+      }
+      return await montarMeta(entradas, (e) => extrairArquivo(url, e, transporte), loader);
     } catch { return null; }
   });
   cache.set(chave, pedido);

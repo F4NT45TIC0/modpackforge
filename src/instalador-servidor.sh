@@ -308,6 +308,10 @@ cat > "$DESTINO/verificar-servidor.sh" <<'MPF_TESTE_BOOT'
 @@VERIFICADOR@@
 MPF_TESTE_BOOT
 chmod +x "$DESTINO/verificar-servidor.sh"
+cat > "$DESTINO/diagnosticar-servidor.sh" <<'MPF_DIAGNOSTICO'
+@@DIAGNOSTICO@@
+MPF_DIAGNOSTICO
+chmod +x "$DESTINO/diagnosticar-servidor.sh"
 
 # -------------------------------------------------------------- fechamento
 
@@ -317,6 +321,8 @@ ok "$baixados baixados, $reaproveitados ja estavam na pasta, $removidos removido
 nota "Pasta do servidor: $DESTINO"
 nota "Para testar o boot: cd \"$DESTINO\" && bash verificar-servidor.sh"
 nota "Resultado da auditoria: verificacao-pack.txt. O teste de boot gera um log separado."
+nota "Se houver falha, o teste mostra orientacoes e grava um diagnostico."
+nota "Para analisar outro crash: bash diagnosticar-servidor.sh logs/latest.log"
 
 if [ "${#SOMENTE_CLIENTE[@]}" -gt 0 ] && [ -n "${SOMENTE_CLIENTE[0]:-}" ]; then
   printf '\n'

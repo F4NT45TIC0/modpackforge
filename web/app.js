@@ -32,6 +32,7 @@ const estado = {
   plano: null,
   resolvendo: false,
   resolucaoId: 0,
+  erroResolucao: null,
   vistos: new Set(), // para animar só as dependências que acabaram de chegar
 };
 
@@ -133,6 +134,8 @@ async function iniciar() {
     return;
   }
 
+  // Liga antes das consultas de versoes: o catalogo nao fica sem ouvintes.
+  ligarEventos();
   desenharLoaders();
   desenharVersoesJogo();
   desenharCategorias();
@@ -168,7 +171,6 @@ async function iniciar() {
 
   await trocarVersaoJogo();
   if (estado.importado) travarAlvoImportado();
-  ligarEventos();
   // Com rascunho, resolve de novo; sem, desenha o inventário vazio.
   if (estado.pack.size) agendarResolucao();
   else desenharPack();
@@ -643,9 +645,12 @@ function confirmarRemocaoMods() {
 }
 
 let timerResolucao;
+let pedidoResolucao;
 function agendarResolucao() {
   guardarRascunho();
   estado.resolucaoId++;
+  pedidoResolucao?.abort();
+  estado.erroResolucao = null;
   clearTimeout(timerResolucao);
   if (!estado.pack.size) {
     estado.plano = null;
@@ -660,6 +665,8 @@ function agendarResolucao() {
 
 async function resolverPack() {
   const resolucaoId = estado.resolucaoId;
+  const controlador = new AbortController();
+  pedidoResolucao = controlador;
   const itens = [...estado.pack.values()].map((m) => ({
     fonte: m.fonte,
     projetoId: m.projetoId,
@@ -668,6 +675,7 @@ async function resolverPack() {
   }));
   try {
     const plano = await api('/api/resolver', {
+      signal: controlador.signal,
       corpo: { loader: estado.loader, mc: estado.mc, loaderVersao: estado.loaderVersao, itens,
         base: estado.importado ? { projetoId: estado.importado.projeto.id, versaoId: estado.importado.versao.id, removidos: estado.importado.removidos } : null },
     });
@@ -678,6 +686,8 @@ async function resolverPack() {
     }
   } catch (erro) {
     if (resolucaoId !== estado.resolucaoId) return;
+    estado.plano = null;
+    estado.erroResolucao = erro.message;
     mostrarAviso(`Não consegui montar o pack: ${erro.message}`, 'erro');
   } finally {
     if (resolucaoId === estado.resolucaoId) {
@@ -751,6 +761,15 @@ function desenharOriginais() {
   </div>`;
 }
 
+function acoesDoConflito(conflito) {
+  return (conflito.envolvidos ?? []).map((e) => {
+    if (estado.pack.has(e.chave)) return `<button class="alerta-acao" data-remover="${esc(e.chave)}">Tirar ${esc(e.nome)}</button>`;
+    const original = arquivosOriginaisAtivos().find((a) => e.chave === `original:${a.caminho}` || (a.projetoId && e.chave === `modrinth:${a.projetoId}`));
+    if (original) return `<button class="alerta-acao" data-remover-original="${esc(original.caminho)}">Tirar ${esc(e.nome)} do original</button>`;
+    return '';
+  }).join('');
+}
+
 function desenharPack() {
   const corpo = $('#packCorpo');
   const alertas = $('#packAlertas');
@@ -772,13 +791,16 @@ function desenharPack() {
   }
 
   const plano = estado.plano;
-  if (!plano) {
-    // Ainda sem resposta do servidor: mostra o que o usuário escolheu.
+  if (!plano || estado.resolvendo) {
+    // Atualiza as escolhas no mesmo clique, antes da conferência remota.
     const escolhidosAgora = [...estado.pack.entries()].map(([chave, m]) => ({ ...m, chave, origem: 'escolhido' }));
-    corpo.innerHTML = cabecalho + '<p class="carregando">Resolvendo dependências adicionais…</p>';
+    corpo.innerHTML = cabecalho + `<p class="pack-secao">Você escolheu (${escolhidosAgora.length})</p><ul class="pack-lista">${escolhidosAgora.map((a) => `<li class="pack-item"><span class="pack-slot">${a.icone ? `<img src="${esc(a.icone)}" alt="" loading="lazy">` : ''}</span><span><span class="pack-nome">${esc(a.nome)}</span><span class="pack-pendente">${estado.resolvendo ? 'Conferindo compatibilidade…' : 'Conferência não concluída'}</span></span><button class="pack-remover" data-remover="${esc(a.chave)}" aria-label="Tirar ${esc(a.nome)} do pack">×</button></li>`).join('')}</ul>`;
+    alertas.innerHTML = estado.erroResolucao
+      ? `<div class="alerta alerta-bloqueio"><strong>Não consegui conferir o pack</strong> — ${esc(estado.erroResolucao)}<button class="alerta-acao" data-tentar-resolucao="1">Tentar novamente</button></div>`
+      : '<p class="pack-pendente">Escolhas atualizadas. Conferindo versões e dependências; você pode continuar adicionando ou removendo mods.</p>';
     $('#packConta').innerHTML = `<span class="legenda" data-tipo="escolhido"><i></i>${contar(estado.pack.size, 'escolhido', 'escolhidos')}</span>`;
     desenharInventario([...originais, ...escolhidosAgora], semMarcas);
-    desenharHotbar([...originais, ...escolhidosAgora], semMarcas, 'Resolvendo…', false);
+    desenharHotbar([...originais, ...escolhidosAgora], semMarcas, estado.erroResolucao ? 'Falha na conferência' : 'Conferindo…', Boolean(estado.erroResolucao));
     atualizarBotaoExportar();
     return;
   }
@@ -810,12 +832,14 @@ function desenharPack() {
       a.origem === 'dependencia' && a.exigidoPor.length
         ? `<span class="pack-porque">exigido por ${esc(a.exigidoPor.join(', '))}</span>`
         : '';
+    const motivos = plano.conflitos.filter((c) => c.severidade === 'bloqueio' && c.envolvidos.some((e) => e.chave === a.chave));
     return `<li class="pack-item" data-origem="${esc(a.origem)}"${conflito ? ' data-conflito="bloqueio"' : ''}${novo}>
       <span class="pack-slot">${icone}</span>
       <span>
         <span class="pack-nome">${esc(a.nome)}</span>
         <span class="pack-versao">${esc(a.versaoNumero ?? '')}</span>
         ${porque}
+        ${motivos.map((c) => `<span class="pack-porque">${esc(c.motivo)}</span>`).join('')}
       </span>
       ${a.origem === 'escolhido' ? `<button class="pack-remover" data-remover="${esc(a.chave)}" title="Tirar do pack" aria-label="Tirar ${esc(a.nome)} do pack"><svg class="icone" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>` : '<span></span>'}
     </li>`;
@@ -849,7 +873,7 @@ function desenharPack() {
     blocos.push(`<div class="alerta alerta-bloqueio">
       <strong>${esc(c.titulo)}</strong> — ${esc(c.motivo)}<br>
       ${esc(c.envolvidos.map((e) => e.nome).join(' e '))}
-      <button class="alerta-acao" data-remover="${esc(c.envolvidos[0].chave)}">Tirar ${esc(c.envolvidos[0].nome)}</button>
+      ${acoesDoConflito(c)}
     </div>`);
   }
   for (const c of plano.conflitos.filter((x) => x.severidade === 'aviso')) {
@@ -904,10 +928,10 @@ function desenharPack() {
 function atualizarBotaoExportar() {
   const bloqueios = estado.plano?.resumo?.bloqueios ?? 0;
   const pendentes = (estado.plano?.faltando?.length ?? 0) + (estado.plano?.erros?.length ?? 0);
-  const pronto = (estado.pack.size > 0 || Boolean(estado.importado)) && estado.loaderVersao && !estado.resolvendo && bloqueios === 0 && pendentes === 0;
+  const pronto = (estado.pack.size > 0 || Boolean(estado.importado)) && estado.loaderVersao && !estado.resolvendo && !estado.erroResolucao && bloqueios === 0 && pendentes === 0;
   const botao = $('#abrirExportar');
   botao.disabled = !pronto;
-  botao.textContent = bloqueios > 0 || pendentes > 0 ? 'Resolva os problemas primeiro' : 'Gerar instalador';
+  botao.textContent = estado.resolvendo ? 'Conferindo o pack…' : estado.erroResolucao ? 'Conferência não concluída' : bloqueios > 0 || pendentes > 0 ? 'Resolva os problemas primeiro' : 'Gerar instalador';
 }
 
 // ------------------------------------------------------------- detalhe
@@ -980,7 +1004,7 @@ function mostrarVerificacaoServidor(v) {
     <p>${v.verificados}/${v.total} JARs conferidos. ${v.javaPermitidos?.length <= 6 ? `Java permitido: ${v.javaPermitidos.join(', ')}` : `Java mínimo: ${v.javaMinimo}`}.</p>
     ${v.avisos.length ? `<details><summary>Avisos (${v.avisos.length})</summary><ul>${v.avisos.map((a) => `<li>${esc(a.texto)}</li>`).join('')}</ul></details>` : ''}
     ${v.bloqueios.length ? `<p>O .sh foi bloqueado. Corrija estes problemas na edição do pack:</p><ul>${v.bloqueios.map((a) => `<li>${esc(a.texto)}</li>`).join('')}</ul>` :
-      '<p>Depois de instalar, com o servidor parado, rode <code>bash verificar-servidor.sh</code> na pasta dele. O teste inicia com um mundo temporário, encerra e salva um log. A conferência das declarações não garante que o servidor abra.</p>'}</section>`;
+      '<p>Depois de instalar, com o servidor parado, rode <code>bash verificar-servidor.sh</code> na pasta dele. O teste inicia com um mundo temporário e, se falhar, mostra a causa provável, orientações e salva o diagnóstico junto do log.</p><p>Configs do modpack pronto são aplicados pelo instalador, com backup dos arquivos anteriores que forem substituídos. Mods adicionados geram seus configs padrão durante a inicialização, quando suportam isso. Esses valores não reproduzem os ajustes de um autor.</p><p>Para analisar um crash posterior: <code>bash diagnosticar-servidor.sh logs/latest.log</code>. A conferência das declarações não garante que o servidor abra nem corrige todos os erros automaticamente.</p>'}</section>`;
 }
 
 async function baixarModpack(projetoId, versaoId, botao) {
@@ -1344,7 +1368,7 @@ function ligarEventos() {
   $('#versaoLoader').addEventListener('change', (e) => {
     if (estado.importado) return;
     estado.loaderVersao = e.target.value;
-    atualizarBotaoExportar();
+    agendarResolucao();
     atualizarResumoAlvo();
   });
 
@@ -1398,6 +1422,7 @@ function ligarEventos() {
 
   // Um ouvinte para a página toda: a lista é redesenhada o tempo todo.
   document.addEventListener('click', (e) => {
+    if (e.target.closest('[data-tentar-resolucao]')) return agendarResolucao();
     const adicionarBtn = e.target.closest('[data-adicionar]');
     if (adicionarBtn) return adicionar(adicionarBtn.dataset.adicionar);
 

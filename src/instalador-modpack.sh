@@ -61,6 +61,15 @@ if [ "$TEM_TERMINAL" = 1 ] && [ ! -t 0 ]; then read -r DESTINO </dev/tty || true
 DESTINO="${DESTINO:-$PADRAO}"
 mkdir -p "$DESTINO"
 DESTINO="$(cd "$DESTINO" && pwd)"
+BACKUP="$DESTINO/.modpackforge-backups/$(date +%Y%m%d-%H%M%S)-$$"
+preservar_anterior() {
+  local caminho="$1" novo="$2" destino="$DESTINO/$1"
+  [[ "$caminho" != mods/*.jar ]] || return 0
+  if [ -f "$destino" ] && ! cmp -s "$destino" "$novo" && [ ! -e "$BACKUP/$caminho" ]; then
+    mkdir -p "$(dirname "$BACKUP/$caminho")"
+    cp -p -- "$destino" "$BACKUP/$caminho"
+  fi
+}
 
 TEMP="$(mktemp -d)"
 trap 'rm -rf -- "$TEMP"' EXIT
@@ -104,6 +113,7 @@ baixar_arquivo() {
     rm -f "$destino.parcial"
     return 1
   fi
+  preservar_anterior "$caminho" "$destino.parcial" || return 1
   mv -f "$destino.parcial" "$destino"
   echo "  OK: $caminho"
 }
@@ -127,9 +137,12 @@ for item in "${OVERRIDES[@]}"; do
     falhas=$((falhas + 1))
     continue
   fi
+  # Salva a versao anterior a toda a aplicacao, sem sobrescrever com o comum.
+  preservar_anterior "$caminho" "$destino.parcial"
   mv -f "$destino.parcial" "$destino"
 done
 if [ "$falhas" -gt 0 ]; then echo '  Nao consegui aplicar todas as configuracoes. Rode novamente.' >&2; exit 1; fi
+[ ! -d "$BACKUP" ] || echo "  Arquivos anteriores preservados em: $BACKUP"
 
 # Gerencia apenas os JARs que este instalador colocou, incluindo overrides.
 # Remove versoes antigas e mods tirados do pack em uma nova exportacao.
@@ -183,6 +196,10 @@ cat > "$DESTINO/verificar-servidor.sh" <<'MPF_TESTE_BOOT'
 @@VERIFICADOR@@
 MPF_TESTE_BOOT
 chmod +x "$DESTINO/verificar-servidor.sh"
+cat > "$DESTINO/diagnosticar-servidor.sh" <<'MPF_DIAGNOSTICO'
+@@DIAGNOSTICO@@
+MPF_DIAGNOSTICO
+chmod +x "$DESTINO/diagnosticar-servidor.sh"
 
 echo ""
 echo "  ${#EXCLUIDOS[@]} arquivos exclusivos do cliente ficaram de fora."
@@ -190,6 +207,8 @@ echo "  Pasta: $DESTINO"
 echo "  Para iniciar: cd \"$DESTINO\" && ./iniciar.sh"
 echo "  Para testar o boot: cd \"$DESTINO\" && bash verificar-servidor.sh"
 echo '  Auditoria: verificacao-pack.txt. O teste de boot gera um log separado.'
+echo '  Se houver falha, o teste mostra orientacoes e grava um diagnostico.'
+echo '  Para analisar outro crash: bash diagnosticar-servidor.sh logs/latest.log'
 echo "  Libere a porta TCP $PORTA no firewall da VPS se necessário."
 if [ "$falhas" -gt 0 ]; then
   echo "  $falhas arquivos falharam. Rode o instalador novamente." >&2

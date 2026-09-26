@@ -13,6 +13,7 @@
 import { lerMetadados, MODS_DO_AMBIENTE } from './jarmeta.mjs';
 import { satisfaz, comparar, descreverExigencia } from './versoes.mjs';
 import { auditarPack } from './auditoria.mjs';
+import { mesmoMod } from '../web/compartilhado/conflitos.mjs';
 
 // Orçamento de passos do ajuste. Cada dependência descoberta e cada troca de
 // versão gasta um passo, e um pack de 30 mods gasta dezenas.
@@ -95,6 +96,7 @@ function aplicarVersao(registro, candidata, meta) {
   registro.distribuicaoLiberada =
     candidata.distribuicaoLiberada !== false && Boolean(candidata.arquivo?.url);
   registro.meta = meta;
+  registro.dependenciasCatalogo = candidata.dependencias ?? [];
   registro.ajustado = true;
 }
 
@@ -159,14 +161,33 @@ function versaoAtende(versaoTexto, { precisa, proibido }) {
  * @param {Function} entrada.listarVersoes    (fonte, projetoId) => versões compatíveis
  * @param {Function} entrada.acharPorModId    (modid) => registro novo ou null
  */
-export async function ajustar({ registros, listarVersoes, acharPorModId, alvo = {} }) {
+export async function ajustar({ registros, listarVersoes, acharPorModId, acharPorProjeto, alvo = {} }) {
   const trocas = [];
   const adicionados = [];
   const problemas = [];
   const modIdsProcurados = new Set();
   const trocasPorMod = new Map(); // impede ficar trocando o mesmo mod pra sempre
+  const projetosProcurados = new Set();
 
   await anexarMetadados(registros, alvo.loader);
+
+  // A loja filtra o tipo de loader, mas nao sua versao. Um addon novo pode
+  // exigir Fabric mais recente que o de um pack original, que fica fixado.
+  const problemasDeAlvo = (r) => auditarPack([r], { ...alvo, lado: 'client' }).bloqueios
+    .filter((p) => ['ambiente-incompativel', 'loader-incorreto', 'lado-incorreto'].includes(p.tipo));
+  for (const r of registros) {
+    if (!r.meta || !problemasDeAlvo(r).length || r.fixado || r.origem === 'original') continue;
+    for (const candidata of await candidatasDe(r, listarVersoes)) {
+      if (candidata.id === r.versaoId) continue;
+      const meta = await lerMetadados(candidata.arquivo.url, candidata.arquivo.tamanho, alvo.loader);
+      if (!meta || problemasDeAlvo({ ...r, meta }).length || criaConflitoNovo(meta, registros, r)) continue;
+      const de = r.versaoNumero;
+      aplicarVersao(r, candidata, meta);
+      trocas.push({ nome: r.nome, de, para: candidata.numero,
+        porque: `compativel com Minecraft ${alvo.mc} / ${alvo.loader} ${alvo.loaderVersao}` });
+      break;
+    }
+  }
 
   let passos = 0;
   let esgotouOrcamento = false;
@@ -182,6 +203,25 @@ export async function ajustar({ registros, listarVersoes, acharPorModId, alvo = 
     }
     let mexeu = false;
     const indice = indexarPorModId(registros);
+
+    // Uma troca de versao pode mudar o projeto da biblioteca exigida (por
+    // exemplo, VeinMiner antigo usa Silk). Consulte a lista da versao escolhida.
+    if (acharPorProjeto) for (const r of [...registros]) {
+      for (const d of r.dependenciasCatalogo ?? []) {
+        if (d.tipo !== 'required' || !d.projetoId) continue;
+        const chave = `${d.fonte}:${d.projetoId}`;
+        if (projetosProcurados.has(chave) || registros.some((a) => a.chave === chave)) continue;
+        projetosProcurados.add(chave);
+        const novo = await acharPorProjeto(d).catch(() => null);
+        if (!novo || registros.some((a) => mesmoMod(a, novo))) continue;
+        novo.origem = 'dependencia'; novo.exigidoPor = [r.nome];
+        novo.dependenciasCatalogo ??= [];
+        registros.push(novo);
+        adicionados.push({ nome: novo.nome, modid: novo.meta?.modId, exigidoPor: novo.exigidoPor });
+        mexeu = true;
+      }
+    }
+    if (mexeu) continue;
 
     // ---- 1. o que está faltando ------------------------------------------
     const faltantes = new Map(); // modid -> [{ faixa, de }]

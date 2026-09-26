@@ -114,6 +114,7 @@
 
   <!-- painel do pack ----------------------------------------------------- -->
   <aside class="pack" id="pack" aria-label="Seu pack">
+    <div class="pack-rolagem" id="packRolagem" tabindex="0" role="region" aria-label="Mods e avisos do pack">
     <header class="pack-topo">
       <div class="pack-titulo">
         <input type="text" id="nomePack" class="campo campo-nome" value="Meu pack" maxlength="80" aria-label="Nome do pack">
@@ -127,10 +128,11 @@
       <p class="pack-legenda" id="packConta">Nenhum item ainda</p>
     </header>
 
-    <div class="pack-alertas" id="packAlertas"></div>
+    <div class="pack-alertas" id="packAlertas" aria-live="polite"></div>
 
     <div class="pack-corpo" id="packCorpo">
       <p class="pack-vazio">Os itens que você escolher aparecem aqui, junto com o que eles exigem.</p>
+    </div>
     </div>
 
     <footer class="pack-rodape">

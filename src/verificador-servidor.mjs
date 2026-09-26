@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 
 export const criarVerificador = () => readFileSync(new URL('./verificar-servidor.sh', import.meta.url), 'utf8');
+export const criarDiagnostico = () => readFileSync(new URL('./diagnosticar-servidor.sh', import.meta.url), 'utf8');
 
 export function textoVerificacao(relatorio) {
   return [

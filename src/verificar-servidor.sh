@@ -14,13 +14,25 @@ LIMITE="${MPF_TEMPO_TESTE:-300}"
 TEMP_TESTE="$(mktemp -d)"
 LOG="verificacao-boot-$(date +%Y%m%d-%H%M%S).log"
 PID=""
+diagnosticar() {
+  local modo="${1:-}" relatorio="${LOG%.log}-diagnostico.txt"
+  if [ -f ./diagnosticar-servidor.sh ]; then
+    # Encerra o processo antes de ler o log, inclusive quando o teste expira.
+    encerrar
+    bash ./diagnosticar-servidor.sh "$LOG" "$modo" | tee "$relatorio" >&2 || true
+    echo "Orientacoes salvas em: $relatorio" >&2
+  else
+    tail -n 40 "$LOG" >&2
+  fi
+}
 encerrar() {
   if [ -n "$PID" ] && kill -0 -- "-$PID" 2>/dev/null; then
     kill -TERM -- "-$PID" 2>/dev/null || true
     for ((n=0; n<20; n++)); do kill -0 -- "-$PID" 2>/dev/null || break; sleep 1; done
     kill -KILL -- "-$PID" 2>/dev/null || true
   fi
-  exec 3>&- 2>/dev/null || true
+  { exec 3>&-; } 2>/dev/null || true
+  PID=""
   rm -rf -- "$TEMP_TESTE"
 }
 trap encerrar EXIT
@@ -42,13 +54,18 @@ if [ "$ABRIU" = 1 ]; then
   printf 'stop\n' >&3
   for ((n=0; n<30; n++)); do kill -0 "$PID" 2>/dev/null || break; sleep 1; done
   if kill -0 "$PID" 2>/dev/null; then
-    echo "O servidor abriu, mas nao encerrou normalmente. Confira $LOG." >&2; exit 1
+    echo "O servidor abriu, mas nao encerrou normalmente. Confira $LOG." >&2
+    diagnosticar; exit 1
   fi
-  if ! wait "$PID"; then echo "O servidor abriu, mas terminou com erro. Confira $LOG." >&2; exit 1; fi
+  codigo=0; wait "$PID" || codigo=$?
+  if [ "$codigo" != 0 ]; then echo "O servidor abriu, mas terminou com erro. Confira $LOG." >&2; diagnosticar "$codigo"; exit 1; fi
   echo "Boot confirmado e encerrado normalmente. Log: $LOG"
+  echo 'As configs padrao que os mods geraram ficam nesta pasta; configs do pack foram aplicadas pelo instalador.'
   echo 'O teste nao garante ausencia de falhas durante o jogo.'
 else
   echo "Boot nao confirmado: crash, dependencia ausente ou tempo esgotado. Confira $LOG e crash-reports/." >&2
-  tail -n 40 "$LOG" >&2
+  modo=""
+  if kill -0 "$PID" 2>/dev/null; then modo=timeout; else wait "$PID" || modo=$?; fi
+  diagnosticar "$modo"
   exit 1
 fi

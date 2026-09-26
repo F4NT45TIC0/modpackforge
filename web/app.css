@@ -576,7 +576,7 @@ select.campo option { background: var(--pedra); color: var(--texto); }
 
 .pack {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto;
   min-height: 0;
   background: var(--pedra);
   border-left: 2px solid var(--bisel-escuro);
@@ -584,6 +584,7 @@ select.campo option { background: var(--pedra); color: var(--texto); }
 }
 
 .pack-topo { padding: 1.1rem 1.25rem 0.9rem; }
+.pack-rolagem { min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-gutter: stable; }
 
 .pack-titulo { display: flex; gap: 0.5rem; align-items: center; }
 
@@ -713,7 +714,8 @@ select.campo option { background: var(--pedra); color: var(--texto); }
 
 .lista-trocas .pack-versao { display: inline; }
 
-.pack-corpo { overflow-y: auto; min-height: 0; padding: 0.5rem 1.25rem 1rem; }
+.pack-corpo { padding: 0.5rem 1.25rem 1rem; }
+.pack-pendente { color: var(--texto-apagado); font-size: var(--t-xs); }
 
 .pack-vazio {
   margin: 0.5rem 0 0;

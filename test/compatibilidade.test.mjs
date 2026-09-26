@@ -146,6 +146,45 @@ test('ajuste preserva versao explicitamente fixada', async () => {
   assert.equal(r.trocas.length, 0); assert.ok(r.problemas.some((p) => p.tipo === 'versao-incompativel'));
 });
 
+test('addon sem versao fixada usa versao compativel com o loader do pack', async (t) => {
+  const antigo = jar({ id: 'addon_loader', version: '1.0.0', depends: { fabricloader: '>=0.16.0' } });
+  const atual = registro('Addon', await lerMetadadosBuffer(jar({ id: 'addon_loader', version: '2.0.0', depends: { fabricloader: '>=0.19.0' } })),
+    { fonte: 'modrinth', projetoId: 'addon_loader', versaoId: 'novo', versaoNumero: '2.0.0', origem: 'escolhido' });
+  t.mock.method(globalThis, 'fetch', async () => new Response(antigo));
+  const r = await ajustar({ registros: [atual], alvo,
+    listarVersoes: async () => [{ id: 'antigo', numero: '1.0.0', arquivo: { url: 'https://stub.test/addon-loader-antigo.jar', tamanho: antigo.length } }], acharPorModId: async () => null });
+  assert.equal(r.registros[0].versaoId, 'antigo'); assert.equal(r.trocas.length, 1);
+  assert.equal(r.verificacao.bloqueios.length, 0);
+  const fixado = { ...atual, meta: await lerMetadadosBuffer(jar({ id: 'addon_loader', depends: { fabricloader: '>=0.19.0' } })), fixado: true };
+  const f = await ajustar({ registros: [fixado], alvo, listarVersoes: () => { throw new Error('Nao deve trocar versao fixada'); }, acharPorModId: async () => null });
+  assert.equal(f.trocas.length, 0); assert.ok(f.verificacao.bloqueios.some((p) => p.tipo === 'ambiente-incompativel'));
+});
+
+test('le bibliotecas aninhadas em uma unica transferencia de JAR pequeno', async (t) => {
+  const filhos = Array.from({ length: 40 }, (_, i) => ({ caminho: `jars/rapida${i}.jar`, dados: jar({ id: `rapida${i}` }) }));
+  const buf = jar({ id: 'remoto_rapido', jars: filhos.map((e) => ({ file: e.caminho })) }, filhos);
+  let chamadas = 0;
+  t.mock.method(globalThis, 'fetch', async () => { chamadas++; return new Response(buf); });
+  const meta = await lerMetadados('https://stub.test/rapido-com-40.jar', buf.length, 'fabric');
+  assert.ok(meta.fornece.includes('rapida39')); assert.equal(meta.embutidos.length, 40);
+  assert.equal(chamadas, 1);
+});
+
+test('troca de addon tambem traz a biblioteca cadastrada na versao antiga', async (t) => {
+  const antigo = jar({ id: 'addon_com_biblioteca', version: '1.0.0', depends: { fabricloader: '>=0.16.0', biblioteca_antiga: '*' } });
+  const atual = registro('Addon', await lerMetadadosBuffer(jar({ id: 'addon_com_biblioteca', version: '2.0.0', depends: { fabricloader: '>=0.19.0' } })),
+    { fonte: 'modrinth', projetoId: 'addon_com_biblioteca', versaoId: 'novo', versaoNumero: '2.0.0', origem: 'escolhido' });
+  const biblioteca = registro('Biblioteca antiga', await lerMetadadosBuffer(jar({ id: 'biblioteca_antiga' })), { chave: 'modrinth:projeto_da_biblioteca', fonte: 'modrinth' });
+  t.mock.method(globalThis, 'fetch', async () => new Response(antigo));
+  const r = await ajustar({ registros: [atual], alvo,
+    listarVersoes: async () => [{ id: 'antigo', numero: '1.0.0', arquivo: { url: 'https://stub.test/addon-com-biblioteca-antigo.jar', tamanho: antigo.length },
+      dependencias: [{ tipo: 'required', fonte: 'modrinth', projetoId: 'projeto_da_biblioteca' }] }],
+    acharPorProjeto: async (d) => { assert.equal(d.projetoId, 'projeto_da_biblioteca'); return biblioteca; },
+    acharPorModId: async () => { throw new Error('A biblioteca ja deveria estar resolvida pelo projeto'); } });
+  assert.equal(r.verificacao.bloqueios.length, 0); assert.equal(r.registros.length, 2);
+  assert.deepEqual(biblioteca.exigidoPor, ['Addon']);
+});
+
 test('busca uma dependencia na CurseForge quando nao existe na Modrinth', async (t) => {
   limparCache();
   const chaveAnterior = process.env.CURSEFORGE_API_KEY;
