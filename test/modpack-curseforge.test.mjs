@@ -47,7 +47,7 @@ test('CurseForge: catálogo, versão vinculada, downloads e instalação oficial
     {caminho:'pack/run.sh',dados:'echo script original\n'}, {caminho:'pack/server.properties',dados:'server-port=25565\nmotd=Autor\n'},
     {caminho:'pack/eula.txt',dados:'eula=true\n'},
   ])];
-  const arquivos=zips.map((b,i)=>({id:41+i,modId:420,displayName:i?'Server':'Client',fileName:i?'server.zip':'client.zip',downloadUrl:urls[i],fileLength:b.length,
+  const arquivos=zips.map((b,i)=>({id:41+i,modId:420,displayName:i?'Server':'Client',fileName:i?'server.zip':'client.zip',downloadUrl:urls[i].replace('mediafilez.forgecdn.net','edge.forgecdn.net'),fileLength:b.length,
     hashes:[{algo:1,value:createHash('sha1').update(b).digest('hex')}],gameVersions:['1.20.1','Forge'],isServerPack:i===1,serverPackFileId:i?null:42,parentProjectFileId:i?41:null}));
   const projeto={id:420,classId:4471,name:'Pack Forge',slug:'pack-forge',links:{websiteUrl:'https://www.curseforge.com/minecraft/modpacks/pack-forge'}};
   const pedidos=[];

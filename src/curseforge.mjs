@@ -132,6 +132,15 @@ function normalizarMod(m) {
 
 function normalizarArquivo(f, distribuicaoLiberada) {
   const sha1 = f.hashes?.find((h) => h.algo === 1)?.value ?? null;
+  // edge é o endereço de redirecionamento da API. Use a CDN de arquivos para
+  // leituras Range e downloads, mantendo caminho/nome publicados pelo autor.
+  let downloadUrl = f.downloadUrl ?? null;
+  if (downloadUrl) {
+    const u = new URL(downloadUrl);
+    if (u.protocol === 'https:' && u.hostname === 'edge.forgecdn.net') {
+      u.hostname = 'mediafilez.forgecdn.net'; downloadUrl = u.href;
+    }
+  }
   const marcas = (f.gameVersions ?? []).map((g) => String(g));
   return {
     fonte: 'curseforge',
@@ -149,7 +158,7 @@ function normalizarArquivo(f, distribuicaoLiberada) {
     loaders: marcas.map((g) => g.toLowerCase()).filter((g) => NOMES_DE_LOADER.includes(g)),
     arquivo: {
       nome: f.fileName,
-      url: f.downloadUrl ?? null,
+      url: downloadUrl,
       tamanho: f.fileLength ?? 0,
       sha1,
       sha512: null,
