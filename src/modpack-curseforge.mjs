@@ -42,7 +42,7 @@ export function arquivosDoServerpack(entradas) {
   for (const origem of nomes) {
     const e = entradas.get(origem), destino = origem.slice(raiz.length);
     if (origem.split('/').some((p) => !p || p === '.' || p === '..') ||
-        !destino || destino.length > 240 || /[\\|*?\[\]\x00-\x1f:]/.test(destino) || destino.startsWith('/') ||
+        !destino || destino.length > 240 || /[\\|\x00-\x1f:]/.test(destino) || destino.startsWith('/') ||
         destino.split('/').some((p) => !p || p === '.' || p === '..') ||
         ![0, 8].includes(e.metodo) || (e.flags & 1) || e.tipoUnix === 0xa000) {
       throw new Error(`Caminho ou entrada inválida no serverpack: ${origem}`);
@@ -115,7 +115,9 @@ export async function prepararModpackCurseforge(projetoId, versaoId, { memoriaMb
     PACK_URL: aspas(oficial.arquivo.url), PACK_SHA1: aspas(oficial.arquivo.sha1),
     MEMORIA_MB: String(Math.trunc(Math.max(2048, Math.min(16384, Number(memoriaMb) || 4096)))),
     PORTA: String(Math.trunc(Math.max(1, Math.min(65535, Number(porta) || 25565)))),
-    ARQUIVOS: '', EXCLUIDOS: '', OVERRIDES: arquivos.map((a) => `  ${aspas(`${a.origem}|${a.destino}`)}`).join('\n'),
+    // unzip trata []?* como padrões mesmo entre aspas do shell. Escape cada
+    // caractere para extrair exatamente o JAR selecionado (ex.: [1.20.1]).
+    ARQUIVOS: '', EXCLUIDOS: '', OVERRIDES: arquivos.map((a) => `  ${aspas(`${a.origem.replace(/[\[\]*?]/g, '\\$&')}|${a.destino}`)}`).join('\n'),
     JAVA_MINIMO: String(verificacao.javaMinimo), JAVA_PERMITIDOS: verificacao.javaPermitidos.join(' '),
     VERIFICACAO: textoVerificacao(verificacao), VERIFICADOR: criarVerificador(), DIAGNOSTICO: criarDiagnostico(),
   };

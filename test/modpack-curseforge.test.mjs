@@ -43,7 +43,7 @@ test('CurseForge: catálogo, versão vinculada, downloads e instalação oficial
   const urls=['https://mediafilez.forgecdn.net/files/1000/1/client.zip','https://mediafilez.forgecdn.net/files/1000/2/server.zip'];
   const manifesto={manifestType:'minecraftModpack',minecraft:{version:'1.20.1',modLoaders:[{id:'forge-47.3.0',primary:true}]}};
   const zips=[montarZip([{caminho:'manifest.json',dados:JSON.stringify(manifesto)}]),montarZip([
-    {caminho:'pack/mods/a.jar',dados:'mod-fixture'}, {caminho:'pack/config/a.toml',dados:'do-autor=true\n'},
+    {caminho:'pack/mods/[1.20.1] a.jar',dados:'mod-fixture'}, {caminho:'pack/config/a.toml',dados:'do-autor=true\n'},
     {caminho:'pack/run.sh',dados:'echo script original\n'}, {caminho:'pack/server.properties',dados:'server-port=25565\nmotd=Autor\n'},
     {caminho:'pack/eula.txt',dados:'eula=true\n'},
   ])];
@@ -90,12 +90,12 @@ test('CurseForge: catálogo, versão vinculada, downloads e instalação oficial
   writeFileSync(path.join(raiz,'rodar.sh'),`#!/usr/bin/env bash\nexport PATH=${aspas(unix(bin))}:"$PATH"\nchmod +x ${aspas(unix(bin))}/*\nexec bash instalar.sh < respostas\n`);
   const r=spawnSync(bash,[unix(path.join(raiz,'rodar.sh'))],{cwd:raiz,encoding:'utf8',timeout:20000});
   assert.equal(r.status,0,r.stdout+r.stderr);
-  assert.equal(readFileSync(path.join(servidor,'mods/a.jar'),'utf8'),'mod-fixture');
+  assert.equal(readFileSync(path.join(servidor,'mods/[1.20.1] a.jar'),'utf8'),'mod-fixture');
   assert.equal(readFileSync(path.join(servidor,'config/a.toml'),'utf8'),'do-autor=true\n');
   assert.match(readFileSync(path.join(servidor,'server.properties'),'utf8'),/server-port=25570\nmotd=Autor/);
   assert.match(readFileSync(path.join(servidor,'run.sh'),'utf8'),/loader-generated/);
   assert.match(readFileSync(path.join(servidor,'.modpackforge-oficial/run.sh'),'utf8'),/original/);
-  assert.equal(readFileSync(path.join(servidor,'.modpackforge-modpack-mods'),'utf8'),'mods/a.jar\n');
+  assert.equal(readFileSync(path.join(servidor,'.modpackforge-modpack-mods'),'utf8'),'mods/[1.20.1] a.jar\n');
   assert.ok(!existsSync(path.join(servidor,'eula.txt'))); // ZIP não aceita o EULA pelo usuário.
   assert.ok(existsSync(path.join(servidor,'verificar-servidor.sh')));
   // Forge anterior ao run.sh precisa iniciar o Forge, mesmo havendo server.jar.
