@@ -37,7 +37,7 @@ baixar() {
 
 echo ""
 echo "  $PACK_NOME — servidor Minecraft $MC_VERSAO / $LOADER_NOME $LOADER_VERSAO"
-for comando in java unzip sha1sum; do
+for comando in java sha1sum; do
   if ! command -v "$comando" >/dev/null 2>&1; then
     echo "  Preciso de $comando. Instale e rode novamente." >&2
     exit 1
@@ -50,6 +50,10 @@ if ! [[ "$JAVA_NUMERO" =~ ^[0-9]+$ ]] || ! [[ " $JAVA_PERMITIDOS " == *" $JAVA_N
 fi
 if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
   echo "  Preciso de curl ou wget." >&2
+  exit 1
+fi
+if [ "${#OVERRIDES[@]}" -gt 0 ] && ! python3 --version >/dev/null 2>&1; then
+  echo '  Preciso de Python 3 para extrair o pack. No Ubuntu: sudo apt install python3' >&2
   exit 1
 fi
 
@@ -73,12 +77,18 @@ preservar_anterior() {
 
 TEMP="$(mktemp -d)"
 trap 'rm -rf -- "$TEMP"' EXIT
-ARQUIVO_PACK="$TEMP/pack.mrpack"
+ARQUIVO_PACK="$DESTINO/.modpackforge-downloads/pack-${PACK_SHA1:-sem-hash}.zip"
 if [ "${#OVERRIDES[@]}" -gt 0 ]; then
-  echo "  Baixando o arquivo do pack para os arquivos e configuracoes..."
-  baixar "$PACK_URL" "$ARQUIVO_PACK"
-  if [ -n "$PACK_SHA1" ] && [ "$(sha1sum "$ARQUIVO_PACK" | cut -d' ' -f1)" != "$PACK_SHA1" ]; then
-    echo "  O hash do arquivo do pack não confere." >&2; exit 1
+  mkdir -p "$(dirname "$ARQUIVO_PACK")"
+  if [ -n "$PACK_SHA1" ] && [ -f "$ARQUIVO_PACK" ] && [ "$(sha1sum "$ARQUIVO_PACK" | cut -d' ' -f1)" = "$PACK_SHA1" ]; then
+    echo '  Reaproveitando o ZIP conferido do pack...'
+  else
+    echo "  Baixando o arquivo do pack para os arquivos e configuracoes..."
+    baixar "$PACK_URL" "$ARQUIVO_PACK.parcial"
+    if [ -n "$PACK_SHA1" ] && [ "$(sha1sum "$ARQUIVO_PACK.parcial" | cut -d' ' -f1)" != "$PACK_SHA1" ]; then
+      echo "  O hash do arquivo do pack não confere." >&2; exit 1
+    fi
+    mv -f "$ARQUIVO_PACK.parcial" "$ARQUIVO_PACK"
   fi
 fi
 
@@ -93,7 +103,7 @@ if [ "$(cat "$DESTINO/.modpackforge-loader" 2>/dev/null)" != "$MARCA_LOADER" ] |
   printf '%s\n' "$MARCA_LOADER" > "$DESTINO/.modpackforge-loader"
 fi
 
-echo "  Baixando ${#ARQUIVOS[@]} arquivos do servidor..."
+if [ "${#ARQUIVOS[@]}" -gt 0 ]; then echo "  Baixando ${#ARQUIVOS[@]} arquivos individuais do servidor..."; fi
 baixar_arquivo() {
   local item="$1" caminho hash url destino
   IFS='|' read -r caminho hash url <<< "$item"
@@ -123,25 +133,13 @@ for item in "${ARQUIVOS[@]}"; do
 done
 wait
 if [ -f "$TEMP/falhou" ]; then echo '  Instalacao incompleta. Rode novamente para tentar os arquivos que faltaram.' >&2; exit 1; fi
-falhas=0
-
-# A especificação aplica os overrides comuns primeiro e os do servidor depois.
-# unzip -p extrai somente o arquivo indicado; os caminhos foram validados ao gerar este script.
-for item in "${OVERRIDES[@]}"; do
-  IFS='|' read -r origem caminho <<< "$item"
-  destino="$DESTINO/$caminho"
-  mkdir -p "$(dirname "$destino")"
-  if ! unzip -p "$ARQUIVO_PACK" "$origem" > "$destino.parcial"; then
-    echo "  Não consegui extrair $origem" >&2
-    rm -f "$destino.parcial"
-    falhas=$((falhas + 1))
-    continue
-  fi
-  # Salva a versao anterior a toda a aplicacao, sem sobrescrever com o comum.
-  preservar_anterior "$caminho" "$destino.parcial"
-  mv -f "$destino.parcial" "$destino"
-done
-if [ "$falhas" -gt 0 ]; then echo '  Nao consegui aplicar todas as configuracoes. Rode novamente.' >&2; exit 1; fi
+if [ "${#OVERRIDES[@]}" -gt 0 ]; then
+  printf '%s\n' "${OVERRIDES[@]}" > "$TEMP/arquivos-pack.txt"
+  echo "  Aplicando ${#OVERRIDES[@]} arquivos do pack (mods e configuracoes)..."
+  python3 - "$ARQUIVO_PACK" "$DESTINO" "$BACKUP" "$TEMP/arquivos-pack.txt" <<'MPF_EXTRATOR'
+@@EXTRATOR@@
+MPF_EXTRATOR
+fi
 [ ! -d "$BACKUP" ] || echo "  Arquivos anteriores preservados em: $BACKUP"
 
 # Gerencia apenas os JARs que este instalador colocou, incluindo overrides.
@@ -229,7 +227,3 @@ echo '  Auditoria: verificacao-pack.txt. O teste de boot gera um log separado.'
 echo '  Se houver falha, o teste mostra orientacoes e grava um diagnostico.'
 echo '  Para analisar outro crash: bash diagnosticar-servidor.sh logs/latest.log'
 echo "  Libere a porta TCP $PORTA no firewall da VPS se necessário."
-if [ "$falhas" -gt 0 ]; then
-  echo "  $falhas arquivos falharam. Rode o instalador novamente." >&2
-  exit 1
-fi

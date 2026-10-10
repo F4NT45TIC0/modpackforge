@@ -7,6 +7,7 @@ import { checarCandidato } from '../web/compartilhado/conflitos.mjs';
 import { lerMetadados, lerMetadadosBuffer } from './jarmeta.mjs';
 import { auditarPack, exigirServidorValido, selecionarModsServidor } from './auditoria.mjs';
 import { criarVerificador, criarDiagnostico, textoVerificacao } from './verificador-servidor.mjs';
+import { criarExtratorPack } from './extrator-pack.mjs';
 
 const MOLDE = new URL('./instalador-modpack.sh', import.meta.url);
 const DEPENDENCIAS = [
@@ -242,6 +243,7 @@ export async function prepararModpackPublicado(projetoId, versaoId, {
     VERIFICACAO: textoVerificacao(verificacao),
     VERIFICADOR: criarVerificador(),
     DIAGNOSTICO: criarDiagnostico(),
+    EXTRATOR: criarExtratorPack(),
   };
   let script = await readFile(MOLDE, 'utf8');
   for (const [chave, valor] of Object.entries(valores)) script = script.split(`@@${chave}@@`).join(valor);

@@ -6,6 +6,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { criarVerificador, criarDiagnostico } from '../src/verificador-servidor.mjs';
+import { criarExtratorPack } from '../src/extrator-pack.mjs';
 import { montarZip } from '../src/zip.mjs';
 
 const bash = process.env.BASH_TEST_BIN ?? (process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash');
@@ -13,6 +14,9 @@ const temBash = spawnSync(bash, ['--version']).status === 0;
 const temSetsid = temBash && spawnSync(bash, ['-c', 'command -v setsid']).status === 0;
 const unix = (p) => p.replace(/\\/g, '/').replace(/^([a-z]):/i, (_, drive) => `/${drive.toLowerCase()}`);
 const aspas = (s) => `'${s.replace(/'/g, "'\\''")}'`;
+const python = process.env.MPF_PYTHON_TEST_BIN ?? (process.platform === 'win32'
+  ? path.join(process.env.USERPROFILE, '.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe') : 'python3');
+const temPython = spawnSync(python, ['--version']).status === 0;
 function pasta(t) {
   const p = mkdtempSync(path.join(tmpdir(), 'mpf-regressao-'));
   t.after(() => {
@@ -61,7 +65,7 @@ test('diagnostico nao executa texto do log e diferencia SIGKILL de erro conhecid
 });
 
 for (const corrompido of [false, true]) {
-  test(`overrides: ${corrompido ? 'extracao falha preserva config existente' : 'config aplicada com backup e reaplicacao sem backup desnecessario'}`, { skip: !temBash }, (t) => {
+  test(`overrides: ${corrompido ? 'extracao falha preserva config existente' : 'config aplicada com backup e reaplicacao sem backup desnecessario'}`, { skip: !temBash || !temPython }, (t) => {
     const raiz = pasta(t), servidor = path.join(raiz, 'servidor'), bin = path.join(raiz, 'bin');
     mkdirSync(path.join(servidor, 'config'), { recursive: true }); mkdirSync(bin);
     writeFileSync(path.join(servidor, 'config/demo.toml'), 'personalizado=true\n');
@@ -71,6 +75,7 @@ for (const corrompido of [false, true]) {
     const pack = corrompido ? Buffer.from('nao e zip') : montarZip([{ caminho: 'server-overrides/config/demo.toml', dados: 'do-autor=true\n' }]);
     writeFileSync(path.join(raiz, 'pack.mrpack'), pack);
     writeFileSync(path.join(bin, 'java'), '#!/usr/bin/env bash\necho \'openjdk version "21.0.7"\' >&2\n');
+    writeFileSync(path.join(bin, 'python3'), `#!/usr/bin/env bash\nexec ${aspas(unix(python))} "$@"\n`);
     writeFileSync(path.join(bin, 'curl'), `#!/usr/bin/env bash\nwhile [ "$#" -gt 0 ]; do if [ "$1" = '-o' ]; then shift; destino="$1"; fi; shift; done\ncp ${aspas(unix(path.join(raiz, 'pack.mrpack')))} "$destino"\n`);
     const valores = {
       PACK_NOME: "'Teste'", PACK_SLUG: "'teste'", MC_VERSAO: "'1.21.1'", LOADER_NOME: "'fabric'", LOADER_VERSAO: "'0.16.14'",
@@ -78,7 +83,7 @@ for (const corrompido of [false, true]) {
       MEMORIA_MB: '4096', PORTA: '25565', JAVA_MINIMO: '21', JAVA_PERMITIDOS: '21', ARQUIVOS: '',
       OVERRIDES: "  'server-overrides/config/demo.toml|config/demo.toml'", EXCLUIDOS: '',
       PACK_URL: "'https://stub.test/pack.mrpack'", PACK_SHA1: aspas(createHash('sha1').update(pack).digest('hex')),
-      VERIFICACAO: 'Teste de regressao', VERIFICADOR: criarVerificador(), DIAGNOSTICO: criarDiagnostico(),
+      VERIFICACAO: 'Teste de regressao', VERIFICADOR: criarVerificador(), DIAGNOSTICO: criarDiagnostico(), EXTRATOR: criarExtratorPack(),
     };
     let script = readFileSync(new URL('../src/instalador-modpack.sh', import.meta.url), 'utf8');
     for (const [k, v] of Object.entries(valores)) script = script.split(`@@${k}@@`).join(v);
@@ -123,7 +128,7 @@ for (const publicado of [false, true]) for (const cenario of ['valido', 'corromp
       MEMORIA_MB: '4096', PORTA: '25565', TOTAL_MODS: '1', JAVA_MINIMO: '21', JAVA_PERMITIDOS: '21', SOMENTE_CLIENTE: '',
       MODS: `  "A|a.jar|${sha}|https://stub.test/a.jar"`, ARQUIVOS: `  'mods/a.jar|${sha}|https://stub.test/a.jar'`,
       OVERRIDES: '', EXCLUIDOS: '', PACK_URL: "'https://nao-deve-baixar.test/pack.mrpack'", PACK_SHA1: "''",
-      VERIFICACAO: 'Teste de regressao', VERIFICADOR: criarVerificador(), DIAGNOSTICO: criarDiagnostico(),
+      VERIFICACAO: 'Teste de regressao', VERIFICADOR: criarVerificador(), DIAGNOSTICO: criarDiagnostico(), EXTRATOR: criarExtratorPack(),
     };
     let script = readFileSync(new URL(`../src/instalador-${publicado ? 'modpack' : 'servidor'}.sh`, import.meta.url), 'utf8');
     for (const [chave, valor] of Object.entries(valores)) script = script.split(`@@${chave}@@`).join(valor);

@@ -5,6 +5,7 @@ import { planoDeInstalacaoServidor } from './loaders.mjs';
 import { gerarSlug } from './exportar.mjs';
 import { auditarPack } from './auditoria.mjs';
 import { criarVerificador, criarDiagnostico, textoVerificacao } from './verificador-servidor.mjs';
+import { criarExtratorPack } from './extrator-pack.mjs';
 
 const aspas = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
 
@@ -115,11 +116,10 @@ export async function prepararModpackCurseforge(projetoId, versaoId, { memoriaMb
     PACK_URL: aspas(oficial.arquivo.url), PACK_SHA1: aspas(oficial.arquivo.sha1),
     MEMORIA_MB: String(Math.trunc(Math.max(2048, Math.min(16384, Number(memoriaMb) || 4096)))),
     PORTA: String(Math.trunc(Math.max(1, Math.min(65535, Number(porta) || 25565)))),
-    // unzip trata []?* como padrões mesmo entre aspas do shell. Escape cada
-    // caractere para extrair exatamente o JAR selecionado (ex.: [1.20.1]).
-    ARQUIVOS: '', EXCLUIDOS: '', OVERRIDES: arquivos.map((a) => `  ${aspas(`${a.origem.replace(/[\[\]*?]/g, '\\$&')}|${a.destino}`)}`).join('\n'),
+    ARQUIVOS: '', EXCLUIDOS: '', OVERRIDES: arquivos.map((a) => `  ${aspas(`${a.origem}|${a.destino}`)}`).join('\n'),
     JAVA_MINIMO: String(verificacao.javaMinimo), JAVA_PERMITIDOS: verificacao.javaPermitidos.join(' '),
     VERIFICACAO: textoVerificacao(verificacao), VERIFICADOR: criarVerificador(), DIAGNOSTICO: criarDiagnostico(),
+    EXTRATOR: criarExtratorPack(),
   };
   let script = await readFile(new URL('./instalador-modpack.sh', import.meta.url), 'utf8');
   for (const [chave, valor] of Object.entries(valores)) script = script.split(`@@${chave}@@`).join(valor);

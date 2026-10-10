@@ -33,6 +33,9 @@ test('manifesto: identifica Forge/NeoForge e rejeita loader ambíguo', () => {
 
 const bash=process.platform==='win32'?'C:/Program Files/Git/bin/bash.exe':'bash';
 const temBash=spawnSync(bash,['--version']).status===0;
+const python=process.env.MPF_PYTHON_TEST_BIN??(process.platform==='win32'
+  ? path.join(process.env.USERPROFILE,'.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe'):'python3');
+const temPython=spawnSync(python,['--version']).status===0;
 const unix=p=>p.replace(/\\/g,'/').replace(/^([a-z]):/i,(_,d)=>`/${d.toLowerCase()}`);
 const aspas=s=>`'${s.replace(/'/g,"'\\''")}'`;
 
@@ -78,14 +81,15 @@ test('CurseForge: catálogo, versão vinculada, downloads e instalação oficial
   assert.equal(pack.resumo.loaderVersao,'47.3.0'); assert.equal(pack.serverpack.url,urls[1]);
   assert.equal(pack.resumo.verificacao.status,'incompleta');
   const script=Buffer.from(pack.servidor.base64,'base64').toString(); assert.ok(!script.includes('@@')); assert.ok(!script.includes('chave-de-fixture'));
-  if(!temBash) return;
+  if(!temBash || !temPython) return;
   const raiz=mkdtempSync(path.join(tmpdir(),'mpf-cf-'));
   t.after(()=>{assert.ok(path.resolve(raiz).startsWith(path.resolve(tmpdir())+path.sep));rmSync(raiz,{recursive:true,force:true});});
   const servidor=path.join(raiz,'server'),bin=path.join(raiz,'bin');mkdirSync(bin);mkdirSync(path.join(servidor,'config'),{recursive:true});
   writeFileSync(path.join(servidor,'config/a.toml'),'personalizado=true\n');
   writeFileSync(path.join(raiz,'server.zip'),zips[1]); writeFileSync(path.join(raiz,'instalar.sh'),script);
-  writeFileSync(path.join(bin,'curl'),`#!/usr/bin/env bash\nwhile [ "$#" -gt 0 ]; do if [ "$1" = -o ]; then shift; destino="$1"; fi; shift; done\ncp ${aspas(unix(path.join(raiz,'server.zip')))} "$destino"\n`);
+  writeFileSync(path.join(bin,'curl'),`#!/usr/bin/env bash\nwhile [ "$#" -gt 0 ]; do if [ "$1" = -o ]; then shift; destino="$1"; fi; shift; done\nprintf 'download\\n' >> ${aspas(unix(path.join(raiz,'downloads')))}\ncp ${aspas(unix(path.join(raiz,'server.zip')))} "$destino"\n`);
   writeFileSync(path.join(bin,'java'),`#!/usr/bin/env bash\nif [ "$1" = -version ]; then echo 'openjdk version "17.0.1"' >&2; exit 0; fi\nprintf '#!/usr/bin/env bash\\necho loader-generated\\n' > run.sh\n`);
+  writeFileSync(path.join(bin,'python3'),`#!/usr/bin/env bash\nexec ${aspas(unix(python))} "$@"\n`);
   writeFileSync(path.join(raiz,'respostas'),unix(servidor)+'\n');
   writeFileSync(path.join(raiz,'rodar.sh'),`#!/usr/bin/env bash\nexport PATH=${aspas(unix(bin))}:"$PATH"\nchmod +x ${aspas(unix(bin))}/*\nexec bash instalar.sh < respostas\n`);
   const r=spawnSync(bash,[unix(path.join(raiz,'rodar.sh'))],{cwd:raiz,encoding:'utf8',timeout:20000});
@@ -98,6 +102,11 @@ test('CurseForge: catálogo, versão vinculada, downloads e instalação oficial
   assert.equal(readFileSync(path.join(servidor,'.modpackforge-modpack-mods'),'utf8'),'mods/[1.20.1] a.jar\n');
   assert.ok(!existsSync(path.join(servidor,'eula.txt'))); // ZIP não aceita o EULA pelo usuário.
   assert.ok(existsSync(path.join(servidor,'verificar-servidor.sh')));
+  const novamente=spawnSync(bash,[unix(path.join(raiz,'rodar.sh'))],{cwd:raiz,encoding:'utf8',timeout:20000});
+  assert.equal(novamente.status,0,novamente.stdout+novamente.stderr);
+  assert.match(novamente.stdout,/Reaproveitando o ZIP conferido/);
+  assert.match(novamente.stdout,/reaproveitados/);
+  assert.equal(readFileSync(path.join(raiz,'downloads'),'utf8').trim().split('\n').length,2); // ZIP + instalador do loader, só na primeira vez.
   // Forge anterior ao run.sh precisa iniciar o Forge, mesmo havendo server.jar.
   rmSync(path.join(servidor,'run.sh'));
   writeFileSync(path.join(servidor,'server.jar'),'vanilla');
