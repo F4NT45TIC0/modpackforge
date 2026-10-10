@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Instala no Linux o lado servidor de um modpack publicado na Modrinth.
+# Instala no Linux um modpack publicado ou seu serverpack oficial.
 set -euo pipefail
 
 PACK_NOME=@@PACK_NOME@@
@@ -75,10 +75,10 @@ TEMP="$(mktemp -d)"
 trap 'rm -rf -- "$TEMP"' EXIT
 ARQUIVO_PACK="$TEMP/pack.mrpack"
 if [ "${#OVERRIDES[@]}" -gt 0 ]; then
-  echo "  Baixando o .mrpack para as configuracoes..."
+  echo "  Baixando o arquivo do pack para os arquivos e configuracoes..."
   baixar "$PACK_URL" "$ARQUIVO_PACK"
   if [ -n "$PACK_SHA1" ] && [ "$(sha1sum "$ARQUIVO_PACK" | cut -d' ' -f1)" != "$PACK_SHA1" ]; then
-    echo "  O hash do .mrpack não confere." >&2; exit 1
+    echo "  O hash do arquivo do pack não confere." >&2; exit 1
   fi
 fi
 
@@ -149,9 +149,12 @@ if [ "$falhas" -gt 0 ]; then echo '  Nao consegui aplicar todas as configuracoes
 REGISTRO="$DESTINO/.modpackforge-modpack-mods"
 ESPERADOS="$TEMP/mods-esperados"
 : > "$ESPERADOS"
-for item in "${ARQUIVOS[@]}" "${OVERRIDES[@]}"; do
-  IFS='|' read -r primeiro segundo resto <<< "$item"
-  case "$primeiro" in overrides/*|server-overrides/*) caminho="$segundo" ;; *) caminho="$primeiro" ;; esac
+for item in "${ARQUIVOS[@]}"; do
+  IFS='|' read -r caminho resto <<< "$item"
+  [[ "$caminho" == mods/*.jar ]] && printf '%s\n' "$caminho" >> "$ESPERADOS"
+done
+for item in "${OVERRIDES[@]}"; do
+  IFS='|' read -r origem caminho <<< "$item"
   [[ "$caminho" == mods/*.jar ]] && printf '%s\n' "$caminho" >> "$ESPERADOS"
 done
 if [ -f "$REGISTRO" ]; then
@@ -164,6 +167,15 @@ cp "$ESPERADOS" "$REGISTRO"
 
 if [ ! -f "$DESTINO/server.properties" ]; then
   printf 'server-port=%s\nmotd=%s\nonline-mode=true\n' "$PORTA" "$PACK_NOME" > "$DESTINO/server.properties"
+else
+  if grep -q '^server-port=' "$DESTINO/server.properties"; then
+    sed "s/^server-port=.*/server-port=$PORTA/" "$DESTINO/server.properties" > "$TEMP/server.properties"
+  else
+    cat "$DESTINO/server.properties" > "$TEMP/server.properties"
+    printf '\nserver-port=%s\n' "$PORTA" >> "$TEMP/server.properties"
+  fi
+  preservar_anterior server.properties "$TEMP/server.properties"
+  cp "$TEMP/server.properties" "$DESTINO/server.properties"
 fi
 
 if ! grep -qi '^eula=true' "$DESTINO/eula.txt" 2>/dev/null; then
@@ -180,6 +192,13 @@ cd "\$(dirname "\$0")" || exit 1
 if [ -f run.sh ]; then
   printf -- '-Xmx%sM -Xms1024M\n' "$MEMORIA_MB" > user_jvm_args.txt
   exec ./run.sh nogui "\$@"
+fi
+if [ "$LOADER_NOME" = forge ]; then
+  for jar in "forge-${MC_VERSAO}-${LOADER_VERSAO}.jar" "forge-${MC_VERSAO}-${LOADER_VERSAO}-universal.jar"; do
+    [ ! -f "\$jar" ] || exec java -Xmx${MEMORIA_MB}M -Xms1024M -jar "\$jar" nogui "\$@"
+  done
+  echo 'Nao achei o JAR do Forge; rode novamente o instalador.' >&2
+  exit 1
 fi
 for jar in "$LOADER_LANCADOR" quilt-server-launch.jar fabric-server-launch.jar server.jar minecraft_server.jar; do
   if [ -n "\$jar" ] && [ -f "\$jar" ]; then exec java -Xmx${MEMORIA_MB}M -Xms1024M -jar "\$jar" nogui "\$@"; fi

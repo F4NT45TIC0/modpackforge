@@ -25,6 +25,7 @@ import { gerarInstaladorServidor, gerarAjudaWindows } from './exportar-servidor.
 import { lerConfig, gravarConfig, caminhoDaConfig } from './store.mjs';
 import { limparCache } from './http.mjs';
 import { lerModpackPublicado, modsEmbutidos, prepararModpackPublicado, registrosDoModpack, registrosDoCliente } from './modpack-publicado.mjs';
+import { prepararModpackCurseforge } from './modpack-curseforge.mjs';
 
 const RAIZ = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const PASTA_PACKS = path.join(RAIZ, 'packs');
@@ -150,12 +151,13 @@ const rotas = {
     const limite = 20;
     const deslocamento = pagina * limite;
 
-    const querCurseforge = tipo === 'mod' && params.fontes !== 'modrinth' && (await curseforge.temChave());
+    const temDuasLojas = ['mod', 'modpack'].includes(tipo);
+    const querCurseforge = temDuasLojas && params.fontes !== 'modrinth' && (await curseforge.temChave());
     const pedido = { consulta, loader, mc, categorias, ordem, deslocamento, limite, tipo };
     const semResultado = { total: 0, itens: [] };
 
     const [rm, rc] = await Promise.allSettled([
-      tipo === 'mod' && params.fontes === 'curseforge' ? Promise.resolve(semResultado) : modrinth.buscar(pedido),
+      temDuasLojas && params.fontes === 'curseforge' ? Promise.resolve(semResultado) : modrinth.buscar(pedido),
       querCurseforge ? curseforge.buscar(pedido) : Promise.resolve(semResultado),
     ]);
 
@@ -170,7 +172,7 @@ const rotas = {
 
     // A busca pulou a CurseForge por causa de uma chave recusada antes: avisa,
     // senão os mods de lá somem da lista sem explicação nenhuma.
-    if (tipo === 'mod' && !querCurseforge && curseforge.chaveFoiReprovada()) {
+    if (temDuasLojas && !querCurseforge && curseforge.chaveFoiReprovada()) {
       avisos.push({
         texto: 'A CurseForge está fora da busca: a chave de API foi recusada.',
         codigo: 'CF_CHAVE_INVALIDA',
@@ -195,14 +197,13 @@ const rotas = {
   'GET projeto': async ({ params, nuvem }) => {
     const { loader, mc } = validarAlvo(params);
     const tipo = ['mod', 'shader', 'modpack', 'resourcepack'].includes(params.tipo) ? params.tipo : 'mod';
-    if (tipo === 'modpack' && params.fonte !== 'modrinth') throw falha(400, 'Modpacks publicados vêm da Modrinth');
     const [item] = validarItens([{ fonte: params.fonte, projetoId: params.id, tipo: tipo === 'modpack' ? 'mod' : tipo }], nuvem);
     const provider = item.fonte === 'modrinth' ? modrinth : curseforge;
     const [projeto, versoes] = await Promise.all([
       provider.projeto(item.projetoId),
       tipo === 'shader' ? modrinth.versoesShader(item.projetoId)
         : tipo === 'resourcepack' ? modrinth.versoesRecurso(item.projetoId, mc)
-          : tipo === 'modpack' ? modrinth.versoes(item.projetoId, { loader, mc })
+          : tipo === 'modpack' ? provider.versoes(item.projetoId, { loader, mc })
             : provider.versoes(item.projetoId, { loader, mc }),
     ]);
     if (projeto.tipo !== tipo && !(tipo === 'mod' && !projeto.tipo)) throw falha(400, 'Tipo de projeto não confere');
@@ -213,6 +214,20 @@ const rotas = {
     const projetoId = String(corpo.projetoId ?? '');
     const versaoId = String(corpo.versaoId ?? '');
     validarIdsModpack(projetoId, versaoId);
+    const fonte = corpo.fonte ?? 'modrinth';
+    if (!['modrinth', 'curseforge'].includes(fonte)) throw falha(400, 'Fonte de modpack inválida');
+    if (fonte === 'curseforge') {
+      if (!/^\d+$/.test(projetoId) || !/^\d+$/.test(versaoId)) throw falha(400, 'ID da CurseForge inválido');
+      const preparado = await prepararModpackCurseforge(projetoId, versaoId, corpo);
+      let pasta = null;
+      if (!nuvem && preparado.servidor) {
+        pasta = path.join(PASTA_PACKS, gerarSlug(preparado.resumo.nome));
+        await mkdir(pasta, { recursive: true });
+        await writeFile(path.join(pasta, preparado.servidor.nome), preparado.servidor.script);
+      }
+      return { pasta, cliente: preparado.cliente, serverpack: preparado.serverpack, resumo: preparado.resumo,
+        servidor: preparado.servidor ? { nome: preparado.servidor.nome, base64: preparado.servidor.script.toString('base64') } : null };
+    }
     const preparado = await prepararModpackPublicado(projetoId, versaoId, {
       memoriaMb: corpo.memoriaMb, porta: corpo.porta,
       gerarServidor: false,

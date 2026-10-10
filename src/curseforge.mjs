@@ -7,6 +7,7 @@ import { lerConfig } from './store.mjs';
 const BASE = 'https://api.curseforge.com/v1';
 const JOGO_MINECRAFT = 432;
 const CLASSE_MODS = 6;
+const CLASSE_MODPACKS = 4471;
 
 const LOADER_PARA_CODIGO = { forge: 1, fabric: 4, quilt: 5, neoforge: 6 };
 
@@ -109,6 +110,7 @@ const NOMES_DE_LOADER = ['forge', 'fabric', 'quilt', 'neoforge'];
 function normalizarMod(m) {
   return {
     fonte: 'curseforge',
+    tipo: m.classId === CLASSE_MODPACKS ? 'modpack' : 'mod',
     id: String(m.id),
     slug: m.slug,
     nome: m.name,
@@ -139,6 +141,9 @@ function normalizarArquivo(f, distribuicaoLiberada) {
     numero: f.displayName,
     canal: CANAL[f.releaseType] ?? 'release',
     publicado: f.fileDate,
+    serverPackId: f.serverPackFileId > 0 ? String(f.serverPackFileId) : null,
+    ehServerpack: f.isServerPack === true,
+    versaoClienteId: f.parentProjectFileId > 0 ? String(f.parentProjectFileId) : null,
     downloads: f.downloadCount ?? 0,
     versoesJogo: marcas.filter(ehVersaoDeJogo),
     loaders: marcas.map((g) => g.toLowerCase()).filter((g) => NOMES_DE_LOADER.includes(g)),
@@ -172,10 +177,11 @@ export async function buscar({
   ordem = 'relevance',
   deslocamento = 0,
   limite = 20,
+  tipo = 'mod',
 }) {
   const p = new URLSearchParams({
     gameId: String(JOGO_MINECRAFT),
-    classId: String(CLASSE_MODS),
+    classId: String(tipo === 'modpack' ? CLASSE_MODPACKS : CLASSE_MODS),
     searchFilter: consulta,
     sortField: String(ORDEM[ordem] ?? 1),
     sortOrder: 'desc',
@@ -218,7 +224,7 @@ export async function versoes(projetoId, { loader, mc } = {}) {
     projeto(projetoId).catch(() => ({ distribuicaoLiberada: true })),
   ]);
   return (dados.data ?? [])
-    .filter((f) => f.isAvailable !== false)
+    .filter((f) => f.isAvailable !== false && !f.isServerPack)
     .map((f) => normalizarArquivo(f, info.distribuicaoLiberada));
 }
 

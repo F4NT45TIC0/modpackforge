@@ -372,7 +372,7 @@ async function buscar() {
   const buscaId = ++estado.buscaId;
   const seletores = ['#consulta', '#ordem', '#fontes'];
   for (const s of seletores) $(s).disabled = false;
-  $('#fontes').disabled = estado.tipo !== 'mod';
+  $('#fontes').disabled = !['mod', 'modpack'].includes(estado.tipo);
 
   estado.buscando = true;
   estado.falhouPagina = false;
@@ -968,7 +968,9 @@ async function abrirDetalhe(chave) {
         ${mod.tipo === 'modpack' ? `<div class="campo-dupla">
           <div class="campo-linha"><label for="modpackRam">RAM do servidor</label><select id="modpackRam" class="campo"><option value="4096">4 GB</option><option value="6144">6 GB</option><option value="8192">8 GB</option><option value="12288">12 GB</option></select></div>
           <div class="campo-linha"><label for="modpackPorta">Porta do servidor</label><input id="modpackPorta" class="campo" type="number" min="1" max="65535" value="25565"></div>
-        </div><p class="ajuda">Ao escolher uma versão, você recebe o .mrpack para o launcher e um .sh para instalar o servidor Linux.</p>` : ''}
+        </div><p class="ajuda">${mod.fonte === 'curseforge'
+          ? 'Baixe o ZIP para importar no launcher. Versões com serverpack oficial também oferecem um .sh para instalar no servidor Linux, preservando mods e configs do autor.'
+          : 'Ao escolher uma versão, você recebe o .mrpack para o launcher e um .sh para instalar o servidor Linux.'}</p>` : ''}
         <div class="detalhe-versoes">
           ${
             versoes.length
@@ -976,10 +978,10 @@ async function abrirDetalhe(chave) {
                   .slice(0, 25)
                   .map(
                     (v) => `<div class="detalhe-versao">
-                      <span>${esc(v.numero)}<br><span class="numero">${esc(v.arquivo?.nome ?? '')}</span></span>
+                      <span>${esc(v.numero)}<br><span class="numero">${esc(v.arquivo?.nome ?? '')}</span>${mod.tipo === 'modpack' && mod.fonte === 'curseforge' ? `<br><span class="ajuda">${v.serverPackId ? 'Serverpack oficial disponível' : 'Sem serverpack oficial vinculado'}</span>` : ''}</span>
                       <span class="canal canal-${esc(v.canal)}">${esc(v.canal)}</span>
                       ${mod.tipo === 'modpack'
-                        ? `<span class="detalhe-acoes"><button class="botao" data-baixar-pack="${esc(v.id)}" data-projeto="${esc(mod.id)}">Baixar</button><button class="botao botao-forte" data-editar-pack="${esc(v.id)}" data-projeto="${esc(mod.id)}">Editar</button></span>`
+                        ? `<span class="detalhe-acoes"><button class="botao" data-baixar-pack="${esc(v.id)}" data-projeto="${esc(mod.id)}" data-fonte="${esc(mod.fonte)}">${mod.fonte === 'curseforge' && v.serverPackId ? 'Baixar / instalar servidor' : 'Baixar'}</button>${mod.fonte === 'modrinth' ? `<button class="botao botao-forte" data-editar-pack="${esc(v.id)}" data-projeto="${esc(mod.id)}">Editar</button>` : ''}</span>`
                         : `<span class="detalhe-acoes"><button class="botao" data-fixar="${esc(chave)}" data-versao="${esc(v.id)}" ${mod.fonte === 'modrinth' && originalNoPack(mod.id) ? 'disabled' : ''}>${fixada === v.id ? 'fixada' : 'usar esta'}</button>${
                           ['shader', 'resourcepack'].includes(mod.tipo) && v.arquivo?.nome?.toLowerCase().endsWith('.zip') && urlDownloadSeguro(v.arquivo?.url)
                             ? `<a class="botao" href="${esc(v.arquivo.url)}" target="_blank" rel="noreferrer">Baixar .zip</a>` : ''
@@ -1007,25 +1009,29 @@ function mostrarVerificacaoServidor(v) {
       '<p>Depois de instalar, com o servidor parado, rode <code>bash verificar-servidor.sh</code> na pasta dele. O teste inicia com um mundo temporário e, se falhar, mostra a causa provável, orientações e salva o diagnóstico junto do log.</p><p>Configs do modpack pronto são aplicados pelo instalador, com backup dos arquivos anteriores que forem substituídos. Mods adicionados geram seus configs padrão durante a inicialização, quando suportam isso. Esses valores não reproduzem os ajustes de um autor.</p><p>Para analisar um crash posterior: <code>bash diagnosticar-servidor.sh logs/latest.log</code>. A conferência das declarações não garante que o servidor abra nem corrige todos os erros automaticamente.</p>'}</section>`;
 }
 
-async function baixarModpack(projetoId, versaoId, botao) {
+async function baixarModpack(projetoId, versaoId, botao, fonte = 'modrinth') {
+  const rotulo = botao.textContent;
   botao.disabled = true;
   botao.textContent = 'Preparando…';
   try {
     const dados = await api('/api/baixar-modpack', {
       corpo: {
-        projetoId, versaoId,
+        projetoId, versaoId, fonte,
         memoriaMb: Number($('#modpackRam').value),
         porta: Number($('#modpackPorta').value),
       },
     });
     for (const url of urlsDeDownload) URL.revokeObjectURL(url);
     urlsDeDownload = dados.servidor ? [urlDoArquivo(dados.servidor.base64)] : [];
-    $('#resultadoModpack').innerHTML = `<p class="ajuda"><strong>${esc(dados.resumo.nome)}</strong> — ${esc(dados.resumo.mc)}, ${esc(dados.resumo.loader)} ${esc(dados.resumo.loaderVersao)}. ${dados.resumo.arquivos} arquivos no servidor; ${dados.resumo.excluidos} exclusivos do cliente ficaram de fora.</p>
+    const cliente = dados.cliente ?? dados.mrpack;
+    $('#resultadoModpack').innerHTML = `<p class="ajuda"><strong>${esc(dados.resumo.nome)}</strong> — ${esc(dados.resumo.mc ?? '')}, ${esc(dados.resumo.loader ?? '')} ${esc(dados.resumo.loaderVersao ?? '')}. ${dados.resumo.oficial ? 'Serverpack oficial do autor.' : fonte === 'modrinth' ? `${dados.resumo.arquivos} arquivos no servidor; ${dados.resumo.excluidos} exclusivos do cliente ficaram de fora.` : ''}</p>
       <ul class="downloads">
-        <li><a class="botao" href="${esc(dados.mrpack.url)}" target="_blank" rel="noreferrer">Baixar ${esc(dados.mrpack.nome)}</a></li>
+        <li><a class="botao" href="${esc(cliente.url ?? cliente.pagina)}" target="_blank" rel="noreferrer">${cliente.url ? 'Baixar' : 'Abrir página para baixar'} ${esc(cliente.nome)}</a></li>
+        ${dados.serverpack ? `<li><a class="botao" href="${esc(dados.serverpack.url ?? dados.serverpack.pagina)}" target="_blank" rel="noreferrer">${dados.serverpack.url ? 'Baixar ZIP do serverpack oficial' : 'Abrir serverpack na CurseForge'}</a></li>` : ''}
         ${dados.servidor ? `<li><a class="botao" href="${urlsDeDownload[0]}" download="${esc(dados.servidor.nome)}">Baixar ${esc(dados.servidor.nome)}</a></li>` : ''}
       </ul>
-      ${dados.servidor ? `<p class="ajuda">Na VPS: <code>bash ${esc(dados.servidor.nome)}</code>. O script baixa os arquivos do pack, aplica as configurações de servidor e pede o aceite do EULA.</p>` : ''}
+      ${(dados.resumo.avisos ?? []).map((a) => `<p class="ajuda">${esc(a)}</p>`).join('')}
+      ${dados.servidor ? `<p class="ajuda">Na VPS: <code>bash ${esc(dados.servidor.nome)}</code>. O script baixa os arquivos, instala o loader na versão do pack, aplica as configs e pede o aceite do EULA. Depois, na pasta escolhida: <code>bash verificar-servidor.sh</code> para testar, e <code>bash iniciar.sh</code> para jogar. Precisa do Java indicado abaixo.</p>` : ''}
       ${mostrarVerificacaoServidor(dados.resumo.verificacao)}
       ${dados.pasta ? `<p class="caminho">O .sh também foi salvo em ${esc(dados.pasta)}</p><button class="botao" id="abrirPastaModpack">Abrir a pasta</button>` : ''}`;
     $('#abrirPastaModpack')?.addEventListener('click', () => api('/api/abrir-pasta', { corpo: { pasta: dados.pasta } }));
@@ -1033,7 +1039,7 @@ async function baixarModpack(projetoId, versaoId, botao) {
     mostrarAviso(`Falhou ao preparar o modpack: ${erro.message}`, 'erro');
   } finally {
     botao.disabled = false;
-    botao.textContent = 'Baixar';
+    botao.textContent = rotulo;
   }
 }
 
@@ -1436,7 +1442,7 @@ function ligarEventos() {
     if (fixarBtn) return fixarVersao(fixarBtn.dataset.fixar, fixarBtn.dataset.versao);
 
     const baixarBtn = e.target.closest('[data-baixar-pack]');
-    if (baixarBtn) return baixarModpack(baixarBtn.dataset.projeto, baixarBtn.dataset.baixarPack, baixarBtn);
+    if (baixarBtn) return baixarModpack(baixarBtn.dataset.projeto, baixarBtn.dataset.baixarPack, baixarBtn, baixarBtn.dataset.fonte);
 
     const editarBtn = e.target.closest('[data-editar-pack]');
     if (editarBtn) return editarModpack(editarBtn.dataset.projeto, editarBtn.dataset.editarPack, editarBtn);

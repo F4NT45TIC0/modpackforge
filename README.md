@@ -20,7 +20,7 @@ Dois cliques em **`ModpackForge.bat`**. Ele abre o navegador na interface.
    - **Remover todos os mods** tira de uma vez os mods escolhidos; ao editar um modpack publicado, tira também os mods originais. Shaders, recursos e configurações permanecem.
 4. Clique em **Gerar instalador**. Shaders entram em `shaderpacks/`, pacotes de recursos em `resourcepacks/`, e o instalador adiciona um carregador de shaders compatível quando necessário. No detalhe de cada shader ou pacote de recursos também há um link para baixar só o `.zip`.
 
-Para baixar um **modpack pronto**, abra a aba correspondente, escolha uma versão e clique em **Baixar**. O ModpackForge entrega o `.mrpack` original diretamente da Modrinth e um `.sh` para instalar o lado servidor numa VPS Linux. O tamanho do `.mrpack` não passa pela função da Vercel; packs de mais de 64 MB funcionam.
+Para baixar um **modpack pronto**, abra a aba correspondente, escolha Minecraft e o loader (inclusive Forge) e selecione uma versão. A busca inclui Modrinth e CurseForge quando a chave está configurada. A Modrinth entrega o `.mrpack` original e um `.sh` para montar o servidor; na CurseForge o ZIP de cliente e o serverpack oficial aparecem separados. Os arquivos grandes são baixados diretamente das lojas, sem passar pela função da Vercel.
 
 Para personalizar um modpack publicado, clique em **Editar** na versão desejada. O painel mostra os mods, shaders e recursos do pack original, inclusive mods `.jar` embutidos em `overrides/mods/`, além de todos os caminhos de configurações e outros arquivos incluídos. Você pode tirar e restaurar arquivos originais, buscar e adicionar mais mods e gerar um novo `.mrpack` e o `.sh` correspondente. O `.mrpack` editado é montado no navegador com os bytes originais dos overrides restantes, preservando configurações, scripts e recursos do autor. A versão do Minecraft e o modloader ficam fixos aos do pack original durante a edição.
 
@@ -38,6 +38,12 @@ O resultado sai em `packs/<nome-do-pack>/`.
 Ao baixar um modpack publicado no modo local, só o `.sh` gerado também fica em `packs/<nome-do-modpack>/`; o `.mrpack` original é baixado pelo link direto da Modrinth. O `.mrpack` editado é gerado para download no navegador.
 
 ### Serverpack de um modpack publicado
+
+Na CurseForge, versões com serverpack oficial vinculado oferecem **Baixar / instalar servidor**. O `.sh` baixa e confere o SHA-1 do ZIP oficial, extrai os mods/configs, instala o loader exato declarado no manifesto do cliente e cria `iniciar.sh`, `verificar-servidor.sh` e `diagnosticar-servidor.sh`. Suporta a pasta de topo comum em ZIPs oficiais, preserva as configurações e guarda scripts originais de início em `.modpackforge-oficial/`. O EULA incluído no ZIP não vale como aceite do usuário. O instalador usa seu próprio início com a memória selecionada; rotinas extras específicas de um autor devem ser conferidas nas instruções do pack.
+
+No servidor Linux, rode `bash instalar-servidor-<pack>.sh`, escolha a pasta e aceite o EULA se concordar. Entre nessa pasta, rode `bash verificar-servidor.sh` para testar e depois `bash iniciar.sh` para iniciar. Você precisa do Java indicado na tela/instalador; por exemplo, Forge 1.12.2 usa Java 8, e Minecraft 1.20.1 usa Java 17. Serverpacks oficiais têm vínculo, manifesto e caminhos verificados, mas seus JARs internos não são auditados durante a preparação: o teste de boot é necessário para conferir a inicialização.
+
+Sem serverpack oficial vinculado, a CurseForge oferece apenas o ZIP de cliente para o launcher. Downloads desativados pelo autor levam à página oficial; o app não inventa URLs para contornar essa restrição. A edição de modpacks no navegador permanece disponível para o formato `.mrpack` da Modrinth.
 
 O `.sh` lê a versão e o modloader declarados no `.mrpack`, baixa os arquivos do servidor, confere SHA-1 e aplica `overrides/` e `server-overrides/` na ordem do formato. Ele exclui arquivos marcados como exclusivos do cliente e confere o lado servidor dos mods hospedados na Modrinth, pois alguns packs marcam todos os mods como necessários no servidor. Precisa de Java, `unzip`, `sha1sum` e `curl` ou `wget` na VPS. No primeiro uso, pergunta onde instalar e pede o aceite do EULA.
 

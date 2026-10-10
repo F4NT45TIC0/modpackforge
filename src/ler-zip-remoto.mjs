@@ -44,6 +44,8 @@ function lerEntradasCentrais(dados, quantidade, offsetCentral) {
     const local = dados.readUInt32LE(pos + 42);
     if (entradas.has(nome) || local >= offsetCentral) throw new Error('Entradas ZIP inválidas.');
     entradas.set(nome, {
+      flags: dados.readUInt16LE(pos + 8),
+      tipoUnix: (dados.readUInt32LE(pos + 38) >>> 16) & 0xf000,
       metodo: dados.readUInt16LE(pos + 10),
       tamanho: dados.readUInt32LE(pos + 20),
       descomprimido: dados.readUInt32LE(pos + 24),
